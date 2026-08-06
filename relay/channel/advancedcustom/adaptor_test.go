@@ -117,6 +117,26 @@ func TestAdaptorSetupRequestHeaderUsesDefaultBearerAuth(t *testing.T) {
 	assert.Equal(t, "Bearer sk-test", header.Get("Authorization"))
 }
 
+func TestAdaptorNormalizesPlaygroundImagePath(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/images/generations",
+				UpstreamPath: "https://upstream.example/v1/images/generations",
+				Converter:    relayconvert.ConverterNone,
+			},
+		},
+	})
+	info.RelayFormat = types.RelayFormatOpenAIImage
+	info.RelayMode = relayconstant.RelayModeImagesGenerations
+	c := advancedCustomGinContext("/pg/images/generations")
+	header := http.Header{}
+
+	require.NoError(t, adaptor.SetupRequestHeader(c, &header, info))
+	assert.Equal(t, "Bearer sk-test", header.Get("Authorization"))
+}
+
 func TestAdaptorSetupRequestHeaderUsesConfiguredHeaderAuth(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{

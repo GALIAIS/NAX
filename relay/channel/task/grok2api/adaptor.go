@@ -54,7 +54,8 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError {
 	if a.customConfig != nil {
-		if route, ok := findVideoRoute(a.customConfig, c.Request.URL.Path, info.OriginModelName); ok {
+		requestPath := common.CanonicalRelayRequestPath(c.Request.URL.Path)
+		if route, ok := findVideoRoute(a.customConfig, requestPath, info.OriginModelName); ok {
 			a.customRoute = route
 			a.useCustomRoute = true
 			if strings.TrimSpace(route.Converter) != "" && strings.TrimSpace(route.Converter) != "none" {
@@ -62,7 +63,7 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 			}
 		} else {
 			return service.TaskErrorWrapperLocal(
-				fmt.Errorf("advanced custom channel does not support video request path %s for model %s", c.Request.URL.Path, info.OriginModelName),
+				fmt.Errorf("advanced custom channel does not support video request path %s for model %s", requestPath, info.OriginModelName),
 				"unsupported_path", http.StatusBadRequest,
 			)
 		}
@@ -693,7 +694,8 @@ func findVideoRoute(config *dto.AdvancedCustomConfig, incomingPath, model string
 	}
 	paths := []string{}
 	if strings.TrimSpace(incomingPath) != "" {
-		paths = append(paths, strings.Split(strings.TrimSpace(incomingPath), "?")[0])
+		path := strings.Split(strings.TrimSpace(incomingPath), "?")[0]
+		paths = append(paths, common.CanonicalRelayRequestPath(path))
 	}
 	paths = append(paths, "/v1/videos", "/v1/videos/generations", "/v1/video/generations")
 	seen := make(map[string]struct{}, len(paths))
