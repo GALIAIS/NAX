@@ -1,14 +1,92 @@
 package grok2api
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
+	rootcommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func newJSONContext(t *testing.T, body string) *gin.Context {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = request
+	return context
+}
+
+func TestBuildRequestBodyNormalizesOfficialGrokVideoControls(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	info := &common.RelayInfo{
+		ChannelMeta: &common.ChannelMeta{UpstreamModelName: "grok-imagine-video"},
+	}
+	context := newJSONContext(t, `{
+		"model":"grok-imagine-video",
+		"prompt":"waves rolling onto a beach",
+		"duration":10,
+		"aspect_ratio":"9:16",
+		"resolution":"1080p",
+		"image":"data:image/png;base64,AAAA",
+		"reference_images":["https://example.test/second.png"]
+	}`)
+
+	body, err := adaptor.BuildRequestBody(context, info)
+	require.NoError(t, err)
+	encoded, err := io.ReadAll(body)
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, rootcommon.Unmarshal(encoded, &payload))
+	require.Equal(t, float64(10), payload["duration"])
+	require.Equal(t, "9:16", payload["aspect_ratio"])
+	require.Equal(t, "1080p", payload["resolution"])
+	require.Equal(t, map[string]any{"url": "data:image/png;base64,AAAA"}, payload["image"])
+	require.Equal(t, []any{map[string]any{"url": "https://example.test/second.png"}}, payload["reference_images"])
+}
+
+func TestAdvancedCustomBuildRequestBodyPreservesOfficialImageObjects(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	info := &common.RelayInfo{
+		ChannelMeta: &common.ChannelMeta{
+			UpstreamModelName: "grok-imagine-video",
+			ChannelOtherSettings: dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{
+				Routes: []dto.AdvancedCustomRoute{{
+					IncomingPath: "/v1/videos",
+					UpstreamPath: "/v1/videos/generations",
+				}},
+			}},
+		},
+		OriginModelName: "grok-imagine-video",
+		RequestURLPath:  "/v1/videos",
+	}
+	adaptor.Init(info)
+	context := newJSONContext(t, `{
+		"model":"grok-imagine-video",
+		"prompt":"a city at night",
+		"image":{"url":"data:image/png;base64,AAAA"},
+		"reference_images":[{"url":"https://example.test/second.png"}]
+	}`)
+
+	body, err := adaptor.BuildRequestBody(context, info)
+	require.NoError(t, err)
+	encoded, err := io.ReadAll(body)
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, rootcommon.Unmarshal(encoded, &payload))
+	require.Equal(t, map[string]any{"url": "data:image/png;base64,AAAA"}, payload["image"])
+	require.Equal(t, []any{map[string]any{"url": "https://example.test/second.png"}}, payload["reference_images"])
+}
 
 func TestAdvancedCustomVideoRouteBuildsURLAndFetchPath(t *testing.T) {
 	adaptor := &TaskAdaptor{}

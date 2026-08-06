@@ -16,10 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ImageIcon, VideoIcon } from 'lucide-react'
+import {
+  Clock3Icon,
+  ImageIcon,
+  ImagePlusIcon,
+  LinkIcon,
+  MonitorUpIcon,
+  RatioIcon,
+  VideoIcon,
+  XIcon,
+} from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { PromptInputButton } from '@/components/ai-elements/prompt-input'
+import {
+  PromptInputButton,
+  usePromptInputAttachments,
+} from '@/components/ai-elements/prompt-input'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   Popover,
@@ -42,6 +56,18 @@ import {
 
 import type { PlaygroundConfig } from '../../types'
 
+const GROK_VIDEO_DURATIONS = ['6', '10', '15'] as const
+const GROK_VIDEO_ASPECT_RATIOS = [
+  '1:1',
+  '16:9',
+  '9:16',
+  '4:3',
+  '3:4',
+  '3:2',
+  '2:3',
+] as const
+const GROK_VIDEO_RESOLUTIONS = ['480p', '720p', '1080p'] as const
+
 type PlaygroundMediaPanelProps = {
   config: PlaygroundConfig
   disabled?: boolean
@@ -53,9 +79,13 @@ type PlaygroundMediaPanelProps = {
 
 export function PlaygroundMediaPanel(props: PlaygroundMediaPanelProps) {
   const { t } = useTranslation()
+  const attachments = usePromptInputAttachments()
   if (props.config.mode === 'chat') return null
 
   const isImage = props.config.mode === 'image'
+  const hasVideoReference =
+    attachments.files.length > 0 ||
+    props.config.video_reference_url.trim().length > 0
   const label = isImage ? t('Image options') : t('Video options')
   const Icon = isImage ? ImageIcon : VideoIcon
 
@@ -84,7 +114,7 @@ export function PlaygroundMediaPanel(props: PlaygroundMediaPanelProps) {
       </Tooltip>
       <PopoverContent
         align='start'
-        className='w-[22rem] max-w-[calc(100vw-2rem)] space-y-3 p-3'
+        className='w-[25rem] max-w-[calc(100vw-2rem)] space-y-4 p-4'
         collisionPadding={8}
         side='top'
         sideOffset={8}
@@ -148,36 +178,107 @@ export function PlaygroundMediaPanel(props: PlaygroundMediaPanelProps) {
             </label>
           </div>
         ) : (
-          <div className='grid gap-3'>
+          <div className='grid gap-4'>
+            <div className='border-border/70 bg-muted/20 grid gap-3 rounded-xl border p-3'>
+              <div className='flex items-start justify-between gap-3'>
+                <div className='flex min-w-0 items-start gap-2.5'>
+                  <div className='bg-primary/10 text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg'>
+                    <ImagePlusIcon size={16} />
+                  </div>
+                  <div className='min-w-0'>
+                    <div className='text-xs font-semibold'>
+                      {t('Reference image')}
+                    </div>
+                    <p className='text-muted-foreground mt-0.5 text-[11px] leading-4'>
+                      {t(
+                        'Upload, paste, drop, or provide a URL. A local image overrides the URL.'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <span className='bg-background text-muted-foreground shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium'>
+                  {hasVideoReference ? t('Ready') : t('Optional')}
+                </span>
+              </div>
+
+              <Button
+                className='w-full justify-center gap-2'
+                disabled={props.disabled}
+                onClick={attachments.openFileDialog}
+                size='sm'
+                type='button'
+                variant='outline'
+              >
+                <MonitorUpIcon size={14} />
+                {attachments.files.length > 0
+                  ? t('Replace reference image')
+                  : t('Upload reference image')}
+              </Button>
+
+              <label className='grid gap-1.5 text-xs'>
+                <span className='text-muted-foreground inline-flex items-center gap-1.5'>
+                  <LinkIcon size={12} />
+                  {t('Reference image URL')}
+                </span>
+                <div className='flex items-center gap-2'>
+                  <Input
+                    inputMode='url'
+                    onChange={(event) =>
+                      props.onConfigChange(
+                        'video_reference_url',
+                        event.target.value
+                      )
+                    }
+                    placeholder='https://example.com/reference.png'
+                    type='url'
+                    value={props.config.video_reference_url}
+                  />
+                  {props.config.video_reference_url ? (
+                    <Button
+                      aria-label={t('Clear')}
+                      className='shrink-0'
+                      onClick={() =>
+                        props.onConfigChange('video_reference_url', '')
+                      }
+                      size='icon-sm'
+                      type='button'
+                      variant='ghost'
+                    >
+                      <XIcon size={14} />
+                    </Button>
+                  ) : null}
+                </div>
+              </label>
+            </div>
+
             <MediaSelect
-              label={t('Video size')}
-              value={props.config.video_size}
-              options={['1280x720', '720x1280', '1024x1024']}
-              onChange={(value) => props.onConfigChange('video_size', value)}
+              icon={<Clock3Icon size={12} />}
+              label={t('Video duration')}
+              value={String(props.config.video_duration)}
+              options={[...GROK_VIDEO_DURATIONS]}
+              optionLabel={(value) => t('{{value}} seconds', { value })}
+              onChange={(value) =>
+                props.onConfigChange('video_duration', Number(value))
+              }
             />
             <MediaSelect
-              label={t('Video quality')}
-              value={props.config.video_quality}
-              options={['standard', 'high']}
-              onChange={(value) => props.onConfigChange('video_quality', value)}
+              icon={<RatioIcon size={12} />}
+              label={t('Video aspect ratio')}
+              value={props.config.video_aspect_ratio}
+              options={[...GROK_VIDEO_ASPECT_RATIOS]}
+              onChange={(value) =>
+                props.onConfigChange('video_aspect_ratio', value)
+              }
             />
-            <label className='grid gap-1 text-xs'>
-              <span className='text-muted-foreground'>
-                {t('Video seconds')}
-              </span>
-              <Input
-                type='number'
-                min={1}
-                max={60}
-                value={props.config.video_seconds}
-                onChange={(event) =>
-                  props.onConfigChange(
-                    'video_seconds',
-                    Math.min(60, Math.max(1, Number(event.target.value) || 1))
-                  )
-                }
-              />
-            </label>
+            <MediaSelect
+              icon={<MonitorUpIcon size={12} />}
+              label={t('Video resolution')}
+              value={props.config.video_resolution}
+              options={[...GROK_VIDEO_RESOLUTIONS]}
+              onChange={(value) =>
+                props.onConfigChange('video_resolution', value)
+              }
+            />
           </div>
         )}
       </PopoverContent>
@@ -186,14 +287,19 @@ export function PlaygroundMediaPanel(props: PlaygroundMediaPanelProps) {
 }
 
 function MediaSelect(props: {
+  icon?: ReactNode
   label: string
   value: string
   options: string[]
+  optionLabel?: (value: string) => ReactNode
   onChange: (value: string) => void
 }) {
   return (
-    <label className='grid gap-1 text-xs'>
-      <span className='text-muted-foreground'>{props.label}</span>
+    <label className='grid gap-1.5 text-xs'>
+      <span className='text-muted-foreground inline-flex items-center gap-1.5'>
+        {props.icon}
+        {props.label}
+      </span>
       <Select
         value={props.value}
         onValueChange={(value) => value && props.onChange(value)}
@@ -205,7 +311,7 @@ function MediaSelect(props: {
           <SelectGroup>
             {props.options.map((option) => (
               <SelectItem key={option} value={option}>
-                {option}
+                {props.optionLabel?.(option) ?? option}
               </SelectItem>
             ))}
           </SelectGroup>

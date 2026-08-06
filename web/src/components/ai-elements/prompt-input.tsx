@@ -438,6 +438,8 @@ export type PromptInputProps = Omit<
   // Minimal constraints
   maxFiles?: number
   maxFileSize?: number // bytes
+  /** Replace the existing selection when a new file reaches maxFiles. */
+  replaceOnMaxFiles?: boolean
   onError?: (err: {
     code: 'max_files' | 'max_file_size' | 'accept'
     message: string
@@ -462,6 +464,7 @@ export const PromptInput = ({
   syncHiddenInput,
   maxFiles,
   maxFileSize,
+  replaceOnMaxFiles,
   onError,
   onSubmit,
   children,
@@ -530,9 +533,21 @@ export const PromptInput = ({
       }
 
       setItems((prev) => {
+        const shouldReplace =
+          replaceOnMaxFiles &&
+          typeof maxFiles === 'number' &&
+          maxFiles > 0 &&
+          sized.length > 0 &&
+          prev.length + sized.length > maxFiles
+        const base = shouldReplace ? [] : prev
+        if (shouldReplace) {
+          for (const file of prev) {
+            if (file.url) URL.revokeObjectURL(file.url)
+          }
+        }
         const capacity =
           typeof maxFiles === 'number'
-            ? Math.max(0, maxFiles - prev.length)
+            ? Math.max(0, maxFiles - base.length)
             : undefined
         const capped =
           typeof capacity === 'number' ? sized.slice(0, capacity) : sized
@@ -552,10 +567,10 @@ export const PromptInput = ({
             filename: file.name,
           })
         }
-        return prev.concat(next)
+        return [...base, ...next]
       })
     },
-    [matchesAccept, maxFiles, maxFileSize, onError, t]
+    [matchesAccept, maxFiles, maxFileSize, onError, replaceOnMaxFiles, t]
   )
 
   const add = useMemo(

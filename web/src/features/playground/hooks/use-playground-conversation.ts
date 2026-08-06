@@ -24,7 +24,7 @@ import {
   createRegeneratedMessages,
   removeMessageByKey,
 } from '../lib'
-import type { Message } from '../types'
+import type { Message, PlaygroundMedia } from '../types'
 
 type UsePlaygroundConversationOptions = {
   messages: Message[]
@@ -44,8 +44,12 @@ export function usePlaygroundConversation({
   )
 
   const handleSendMessage = useCallback(
-    (text: string) => {
-      const nextMessages = appendUserMessagePair(messages, text)
+    (text: string, inputReferences: PlaygroundMedia[] = []) => {
+      const nextMessages = appendUserMessagePair(
+        messages,
+        text,
+        inputReferences
+      )
       updateMessages(nextMessages)
       sendChat(nextMessages)
     },

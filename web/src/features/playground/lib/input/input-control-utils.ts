@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { GroupOption, ModelOption } from '../../types'
 
 type InputControlStateOptions = {
+  allowEmptyText?: boolean
   disabled?: boolean
   groups: GroupOption[]
   hasStopHandler: boolean
@@ -49,7 +50,17 @@ export function getSubmittableInputText(
   return message.text
 }
 
+export function isValidReferenceImageURL(value: string): boolean {
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export function getInputControlState({
+  allowEmptyText = false,
   disabled,
   groups,
   hasStopHandler,
@@ -61,7 +72,8 @@ export function getInputControlState({
   const hasModels = models.length > 0
 
   return {
-    canSubmit: !disabled && hasModels && text.trim().length > 0,
+    canSubmit:
+      !disabled && hasModels && (allowEmptyText || text.trim().length > 0),
     isSelectorDisabled: disabled || isModelLoading || groups.length === 0,
     shouldShowStop: Boolean(isGenerating && hasStopHandler),
   }

@@ -42,6 +42,10 @@ export const playgroundConfigSchema = z.object({
   video_size: z.string().optional(),
   video_seconds: z.number().optional(),
   video_quality: z.string().optional(),
+  video_duration: z.number().optional(),
+  video_aspect_ratio: z.string().optional(),
+  video_resolution: z.string().optional(),
+  video_reference_url: z.string().optional(),
 })
 
 export const parameterEnabledSchema = z.object({

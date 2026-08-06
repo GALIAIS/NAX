@@ -59,6 +59,12 @@ export interface Message {
   status?: MessageStatus
   errorCode?: string | null
   media?: PlaygroundMedia[]
+  /**
+   * Ephemeral source media used by image-to-video requests. The storage
+   * schema intentionally omits this field so local data URLs are never
+   * persisted to localStorage.
+   */
+  inputReferences?: PlaygroundMedia[]
 }
 
 // API payload types
@@ -144,6 +150,10 @@ export interface PlaygroundConfig {
   video_size: string
   video_seconds: number
   video_quality: string
+  video_duration: number
+  video_aspect_ratio: string
+  video_resolution: string
+  video_reference_url: string
 }
 
 export interface ParameterEnabled {
@@ -196,10 +206,16 @@ export interface VideoGenerationRequest {
   seconds?: string
   quality?: string
   n?: number
+  duration?: number
+  aspect_ratio?: string
+  resolution?: string
+  image?: string | { url: string }
+  reference_images?: Array<string | { url: string }>
 }
 
 export interface VideoGenerationResponse {
   id?: string
+  request_id?: string
   task_id?: string
   status?: string
   metadata?: {

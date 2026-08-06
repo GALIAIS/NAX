@@ -35,7 +35,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { Message } from '../../types'
+import type { Message, PlaygroundMedia } from '../../types'
 import {
   createLoadingAssistantMessage,
   createUserMessage,
@@ -56,13 +56,17 @@ type ChatMessageRenderState = {
 
 export function appendUserMessagePair(
   messages: Message[],
-  content: string
+  content: string,
+  inputReferences: PlaygroundMedia[] = []
 ): Message[] {
   const submittedAt = Date.now()
+  const userMessage = createUserMessage(content, submittedAt)
 
   return [
     ...messages,
-    createUserMessage(content, submittedAt),
+    inputReferences.length > 0
+      ? { ...userMessage, inputReferences }
+      : userMessage,
     createLoadingAssistantMessage(submittedAt),
   ]
 }

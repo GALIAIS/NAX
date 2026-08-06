@@ -34,6 +34,7 @@ import {
   updateLastAssistantMessage,
   updateCurrentVersionContent,
 } from '../lib'
+import { buildVideoGenerationRequest } from '../lib/media/video-request-utils'
 import type { Message, PlaygroundConfig, PlaygroundMedia } from '../types'
 
 type UseMediaGenerationOptions = {
@@ -69,8 +70,29 @@ function getImageURL(item: {
   return ''
 }
 
-function getTaskID(response: { id?: string; task_id?: string }): string {
-  return response.id?.trim() || response.task_id?.trim() || ''
+function getTaskID(response: {
+  id?: string
+  request_id?: string
+  task_id?: string
+}): string {
+  return (
+    response.id?.trim() ||
+    response.request_id?.trim() ||
+    response.task_id?.trim() ||
+    ''
+  )
+}
+
+function getVideoReferenceURLs(messages: Message[]): string[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.from !== 'user') continue
+    return (message.inputReferences ?? [])
+      .filter((media) => media.kind === 'image')
+      .map((media) => media.url.trim())
+      .filter(Boolean)
+  }
+  return []
 }
 
 function isExternalMediaURL(value: string): boolean {
@@ -217,7 +239,11 @@ export function useMediaGeneration({
   const sendMedia = useCallback(
     async (messages: Message[]) => {
       const prompt = getPrompt(messages)
-      if (!prompt) {
+      const videoReferenceURLs = getVideoReferenceURLs(messages)
+      if (
+        (config.mode === 'image' && !prompt) ||
+        (config.mode === 'video' && !prompt && videoReferenceURLs.length === 0)
+      ) {
         toast.error(t('Enter a prompt before generating media'))
         return
       }
@@ -254,17 +280,7 @@ export function useMediaGeneration({
           setMediaMessage(generation, media)
         } else {
           const response = await createVideo(
-            {
-              model: config.model,
-              group: config.group,
-              prompt,
-              size: config.video_size,
-              seconds: String(
-                Math.min(60, Math.max(1, Math.round(config.video_seconds)))
-              ),
-              quality: config.video_quality,
-              n: 1,
-            },
+            buildVideoGenerationRequest(config, prompt, videoReferenceURLs),
             abortController.signal
           )
           const taskId = getTaskID(response)

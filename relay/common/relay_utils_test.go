@@ -263,6 +263,29 @@ func TestTaskSubmitReqNormalizesVideoProtocolNumbersAndBillingFields(t *testing.
 	assert.Equal(t, map[string]float64{"seconds": 5.5, "count": 2}, TaskRequestBillingRatios(req))
 }
 
+func TestTaskSubmitReqAcceptsOfficialVideoImageObjects(t *testing.T) {
+	var req TaskSubmitReq
+	require.NoError(t, rootcommon.Unmarshal([]byte(`{
+		"model":"grok-imagine-video",
+		"image":{"url":"https://example.test/first.png"},
+		"reference_images":[
+			{"url":"https://example.test/second.png"},
+			"https://example.test/third.png"
+		]
+	}`), &req))
+
+	assert.Equal(t, "https://example.test/first.png", req.Image)
+	assert.Equal(t, []string{
+		"https://example.test/second.png",
+		"https://example.test/third.png",
+	}, req.ReferenceImages)
+	assert.Equal(t, []string{
+		"https://example.test/first.png",
+		"https://example.test/second.png",
+		"https://example.test/third.png",
+	}, req.ImageList())
+}
+
 func TestTaskSubmitReqRejectsInvalidSecondsAndBoundsBatchFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	newContext := func(body string) *gin.Context {

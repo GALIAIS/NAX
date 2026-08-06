@@ -228,7 +228,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if image := imageValue(input); image != nil {
 		body["image"] = image
 	}
-	if refs, ok := input["reference_images"]; ok && refs != nil {
+	if refs := referenceImageValues(input["reference_images"]); len(refs) > 0 {
 		body["reference_images"] = refs
 	}
 	for _, key := range []string{"first_frame_image", "last_frame_image"} {
@@ -950,6 +950,39 @@ func imageValue(values map[string]any) any {
 		}
 	}
 	return nil
+}
+
+// referenceImageValues converts New API's provider-neutral string list to
+// Grok2API's official [{"url":"..."}] video shape. Already-normalized
+// objects remain supported for direct API clients.
+func referenceImageValues(value any) []map[string]any {
+	var raw []any
+	switch values := value.(type) {
+	case []string:
+		raw = make([]any, 0, len(values))
+		for _, item := range values {
+			raw = append(raw, item)
+		}
+	case []any:
+		raw = values
+	default:
+		return nil
+	}
+
+	result := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		switch typed := item.(type) {
+		case string:
+			if value := strings.TrimSpace(typed); value != "" {
+				result = append(result, map[string]any{"url": value})
+			}
+		case map[string]any:
+			if value, ok := typed["url"].(string); ok && strings.TrimSpace(value) != "" {
+				result = append(result, map[string]any{"url": strings.TrimSpace(value)})
+			}
+		}
+	}
+	return result
 }
 
 func aspectRatioFromSize(size string) string {

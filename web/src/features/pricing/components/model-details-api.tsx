@@ -41,6 +41,11 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useStatus } from '@/hooks/use-status'
 
 import {
+  buildImageApiSample,
+  buildVideoApiSample,
+  type MediaSampleLanguage,
+} from '../lib/media-api-samples'
+import {
   buildRateLimits,
   buildSupportedParameters,
   formatRateLimit,
@@ -58,7 +63,7 @@ import type { PricingModel } from '../types'
 // types the model actually supports. This keeps copy-pasted code accurate and
 // provider-shaped (OpenAI vs Anthropic vs Gemini, etc.).
 
-type Lang = 'curl' | 'python' | 'typescript' | 'javascript'
+type Lang = MediaSampleLanguage
 
 const LANG_LABELS: Record<Lang, string> = {
   curl: 'cURL',
@@ -109,7 +114,7 @@ function buildChatSample(lang: Lang, ctx: SampleContext): string {
       `curl ${url} \\`,
       `  -H "Authorization: Bearer $${ctx.apiKeyEnv}" \\`,
       `  -H "Content-Type: application/json" \\`,
-      `  -d '${bodyJson.replace(/\n/g, '\n     ')}'`,
+      `  -d '${bodyJson.replaceAll('\n', '\n     ')}'`,
     ].join('\n')
   }
 
@@ -177,7 +182,7 @@ function buildAnthropicSample(lang: Lang, ctx: SampleContext): string {
       `  -H "x-api-key: $${ctx.apiKeyEnv}" \\`,
       `  -H "anthropic-version: 2023-06-01" \\`,
       `  -H "Content-Type: application/json" \\`,
-      `  -d '${body.replace(/\n/g, '\n     ')}'`,
+      `  -d '${body.replaceAll('\n', '\n     ')}'`,
     ].join('\n')
   }
   if (lang === 'python') {
@@ -249,7 +254,7 @@ function buildGeminiSample(lang: Lang, ctx: SampleContext): string {
     return [
       `curl '${url}' \\`,
       `  -H 'Content-Type: application/json' \\`,
-      `  -d '${body.replace(/\n/g, '\n     ')}'`,
+      `  -d '${body.replaceAll('\n', '\n     ')}'`,
     ].join('\n')
   }
   if (lang === 'python') {
@@ -299,7 +304,7 @@ function buildEmbeddingSample(lang: Lang, ctx: SampleContext): string {
       `curl ${url} \\`,
       `  -H "Authorization: Bearer $${ctx.apiKeyEnv}" \\`,
       `  -H "Content-Type: application/json" \\`,
-      `  -d '${body.replace(/\n/g, '\n     ')}'`,
+      `  -d '${body.replaceAll('\n', '\n     ')}'`,
     ].join('\n')
   }
   if (lang === 'python') {
@@ -351,78 +356,6 @@ function buildEmbeddingSample(lang: Lang, ctx: SampleContext): string {
   ].join('\n')
 }
 
-function buildImageSample(lang: Lang, ctx: SampleContext): string {
-  const url = `${ctx.baseUrl}${ctx.endpointPath}`
-  const prompt = 'A serene koi pond at sunset, ukiyo-e style.'
-
-  if (lang === 'curl') {
-    const body = JSON.stringify(
-      { model: ctx.modelName, prompt, size: '1024x1024', n: 1 },
-      null,
-      2
-    )
-    return [
-      `curl ${url} \\`,
-      `  -H "Authorization: Bearer $${ctx.apiKeyEnv}" \\`,
-      `  -H "Content-Type: application/json" \\`,
-      `  -d '${body.replace(/\n/g, '\n     ')}'`,
-    ].join('\n')
-  }
-  if (lang === 'python') {
-    return [
-      'from openai import OpenAI',
-      '',
-      `client = OpenAI(base_url="${ctx.baseUrl}/v1", api_key="<YOUR_API_KEY>")`,
-      '',
-      'response = client.images.generate(',
-      `    model="${ctx.modelName}",`,
-      `    prompt="${prompt}",`,
-      `    size="1024x1024",`,
-      `    n=1,`,
-      ')',
-      '',
-      'print(response.data[0].url)',
-    ].join('\n')
-  }
-  if (lang === 'typescript') {
-    return [
-      `import OpenAI from 'openai'`,
-      '',
-      `const client = new OpenAI({`,
-      `  baseURL: '${ctx.baseUrl}/v1',`,
-      `  apiKey: process.env.${ctx.apiKeyEnv},`,
-      `})`,
-      '',
-      `const response = await client.images.generate({`,
-      `  model: '${ctx.modelName}',`,
-      `  prompt: '${prompt}',`,
-      `  size: '1024x1024',`,
-      `  n: 1,`,
-      `})`,
-      '',
-      `console.log(response.data[0].url)`,
-    ].join('\n')
-  }
-  return [
-    `const response = await fetch('${url}', {`,
-    `  method: 'POST',`,
-    `  headers: {`,
-    `    Authorization: \`Bearer \${process.env.${ctx.apiKeyEnv}}\`,`,
-    `    'Content-Type': 'application/json',`,
-    `  },`,
-    `  body: JSON.stringify({`,
-    `    model: '${ctx.modelName}',`,
-    `    prompt: '${prompt}',`,
-    `    size: '1024x1024',`,
-    `    n: 1,`,
-    `  }),`,
-    `})`,
-    '',
-    `const data = await response.json()`,
-    `console.log(data.data[0].url)`,
-  ].join('\n')
-}
-
 function buildSample(
   lang: Lang,
   endpointType: string,
@@ -430,9 +363,15 @@ function buildSample(
 ): string {
   if (endpointType === 'anthropic') return buildAnthropicSample(lang, ctx)
   if (endpointType === 'gemini') return buildGeminiSample(lang, ctx)
-  if (endpointType === 'embeddings' || endpointType === 'jina-rerank')
+  if (endpointType === 'embeddings' || endpointType === 'jina-rerank') {
     return buildEmbeddingSample(lang, ctx)
-  if (endpointType === 'image-generation') return buildImageSample(lang, ctx)
+  }
+  if (endpointType === 'image-generation') {
+    return buildImageApiSample(lang, ctx)
+  }
+  if (endpointType === 'openai-video') {
+    return buildVideoApiSample(lang, ctx)
+  }
   return buildChatSample(lang, ctx)
 }
 

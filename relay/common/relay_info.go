@@ -953,14 +953,16 @@ func (t *TaskSubmitReq) RequestedOutputCount() int {
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	type Alias TaskSubmitReq
 	aux := &struct {
-		Metadata json.RawMessage `json:"metadata,omitempty"`
-		Duration json.RawMessage `json:"duration,omitempty"`
-		Seconds  json.RawMessage `json:"seconds,omitempty"`
-		N        json.RawMessage `json:"n,omitempty"`
-		FPS      json.RawMessage `json:"fps,omitempty"`
-		Seed     json.RawMessage `json:"seed,omitempty"`
-		Width    json.RawMessage `json:"width,omitempty"`
-		Height   json.RawMessage `json:"height,omitempty"`
+		Metadata        json.RawMessage `json:"metadata,omitempty"`
+		Duration        json.RawMessage `json:"duration,omitempty"`
+		Seconds         json.RawMessage `json:"seconds,omitempty"`
+		N               json.RawMessage `json:"n,omitempty"`
+		FPS             json.RawMessage `json:"fps,omitempty"`
+		Seed            json.RawMessage `json:"seed,omitempty"`
+		Width           json.RawMessage `json:"width,omitempty"`
+		Height          json.RawMessage `json:"height,omitempty"`
+		Image           json.RawMessage `json:"image,omitempty"`
+		ReferenceImages json.RawMessage `json:"reference_images,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(t),
@@ -1041,6 +1043,20 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 			t.Seed = int64(seed)
 		}
 	}
+	if len(aux.Image) > 0 {
+		image, err := parseTaskImageReference(aux.Image)
+		if err != nil {
+			return fmt.Errorf("invalid image reference: %w", err)
+		}
+		t.Image = image
+	}
+	if len(aux.ReferenceImages) > 0 {
+		references, err := parseTaskImageReferences(aux.ReferenceImages)
+		if err != nil {
+			return fmt.Errorf("invalid reference_images: %w", err)
+		}
+		t.ReferenceImages = references
+	}
 
 	if len(aux.Metadata) > 0 {
 		var metadataStr string
@@ -1086,6 +1102,47 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+func parseTaskImageReference(raw json.RawMessage) (string, error) {
+	if value := strings.TrimSpace(string(raw)); value == "" || value == "null" {
+		return "", nil
+	}
+	var text string
+	if err := common.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text), nil
+	}
+	var object struct {
+		URL string `json:"url"`
+	}
+	if err := common.Unmarshal(raw, &object); err != nil {
+		return "", fmt.Errorf("must be a URL string or an object containing url")
+	}
+	if strings.TrimSpace(object.URL) == "" {
+		return "", fmt.Errorf("url is required")
+	}
+	return strings.TrimSpace(object.URL), nil
+}
+
+func parseTaskImageReferences(raw json.RawMessage) ([]string, error) {
+	if value := strings.TrimSpace(string(raw)); value == "" || value == "null" {
+		return nil, nil
+	}
+	var items []json.RawMessage
+	if err := common.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("must be an array")
+	}
+	result := make([]string, 0, len(items))
+	for index, item := range items {
+		value, err := parseTaskImageReference(item)
+		if err != nil {
+			return nil, fmt.Errorf("item %d: %w", index, err)
+		}
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result, nil
 }
 
 var taskSubmitKnownJSONFields = map[string]bool{

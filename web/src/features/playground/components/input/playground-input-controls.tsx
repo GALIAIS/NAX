@@ -20,7 +20,10 @@ import { ImageIcon, SendIcon, SquareIcon, VideoIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { PromptInputButton } from '@/components/ai-elements/prompt-input'
+import {
+  PromptInputButton,
+  usePromptInputAttachments,
+} from '@/components/ai-elements/prompt-input'
 import { ModelGroupSelector } from '@/components/model-group-selector'
 import {
   Select,
@@ -45,6 +48,7 @@ type PlaygroundInputControlsProps = {
   onModelChange: (value: string) => void
   onStop?: () => void
   mode: PlaygroundMode
+  hasReferenceURL?: boolean
   onModeChange: (mode: PlaygroundMode) => void
   text: string
   tools: ReactNode
@@ -62,13 +66,17 @@ export function PlaygroundInputControls({
   onModelChange,
   onStop,
   mode,
+  hasReferenceURL = false,
   onModeChange,
   text,
   tools,
 }: PlaygroundInputControlsProps) {
   const { t } = useTranslation()
+  const attachments = usePromptInputAttachments()
   const { canSubmit, isSelectorDisabled, shouldShowStop } =
     getInputControlState({
+      allowEmptyText:
+        mode === 'video' && (hasReferenceURL || attachments.files.length > 0),
       disabled,
       groups,
       hasStopHandler: Boolean(onStop),

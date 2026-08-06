@@ -84,6 +84,7 @@ export function PlaygroundMessageContent({
     message.status !== MESSAGE_STATUS.LOADING &&
     message.status !== MESSAGE_STATUS.STREAMING
   const hasMedia = (message.media?.length ?? 0) > 0
+  const hasInputReferences = (message.inputReferences?.length ?? 0) > 0
 
   let renderedContent: ReactNode = null
   if (isSourceVisible && showMessageContent) {
@@ -160,8 +161,35 @@ export function PlaygroundMessageContent({
         </>
       )}
 
-      {!isError && (showMessageContent || hasMedia) && (
+      {!isError && (showMessageContent || hasMedia || hasInputReferences) && (
         <>
+          {hasInputReferences ? (
+            <div className='mb-3 flex max-w-full flex-wrap gap-2'>
+              {message.inputReferences?.map((media) => (
+                <a
+                  className='bg-muted/20 border-border/70 group relative flex max-w-64 items-center gap-2 overflow-hidden rounded-lg border p-1.5'
+                  href={media.url}
+                  key={media.url}
+                  rel='noreferrer'
+                  target='_blank'
+                >
+                  <img
+                    alt={media.alt || t('Reference image')}
+                    className='size-11 shrink-0 rounded-md object-cover'
+                    src={media.url}
+                  />
+                  <span className='min-w-0 pr-2'>
+                    <span className='text-foreground block truncate text-xs font-medium'>
+                      {t('Reference image')}
+                    </span>
+                    <span className='text-muted-foreground block text-[10px]'>
+                      {t('Video input')}
+                    </span>
+                  </span>
+                </a>
+              ))}
+            </div>
+          ) : null}
           {hasMedia ? (
             <div className='mb-3 grid gap-3 sm:grid-cols-2'>
               {message.media?.map((media) =>

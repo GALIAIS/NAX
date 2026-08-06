@@ -64,6 +64,10 @@ export const DEFAULT_CONFIG: PlaygroundConfig = {
   video_size: '1280x720',
   video_seconds: 5,
   video_quality: 'standard',
+  video_duration: 6,
+  video_aspect_ratio: '16:9',
+  video_resolution: '720p',
+  video_reference_url: '',
 }
 
 export const DEFAULT_PARAMETER_ENABLED: ParameterEnabled = {
