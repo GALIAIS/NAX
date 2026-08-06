@@ -27,6 +27,8 @@ import {
 } from './section-registry.tsx'
 
 const defaultOperationsSettings: OperationsSettings = {
+  'theme.global':
+    '{"theme":"system","preset":"default","font":"default","radius":"default","scale":"default","content_layout":"full","layout_variant":"inset","layout_collapsible":"icon","direction":"ltr"}',
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,

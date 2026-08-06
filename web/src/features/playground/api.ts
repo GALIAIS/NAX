@@ -22,8 +22,13 @@ import { API_ENDPOINTS } from './constants'
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
-  ModelOption,
   GroupOption,
+  ImageGenerationRequest,
+  ImageGenerationResponse,
+  ModelOption,
+  VideoGenerationRequest,
+  VideoGenerationResponse,
+  VideoStatusResponse,
 } from './types'
 
 /**
@@ -36,8 +41,73 @@ export async function sendChatCompletion(
   const res = await api.post(API_ENDPOINTS.CHAT_COMPLETIONS, payload, {
     signal,
     skipErrorHandler: true,
-  } as Record<string, unknown>)
+  })
   return res.data
+}
+
+export async function generateImages(
+  payload: ImageGenerationRequest,
+  signal?: AbortSignal
+): Promise<ImageGenerationResponse> {
+  const res = await api.post(API_ENDPOINTS.IMAGE_GENERATIONS, payload, {
+    signal,
+    skipErrorHandler: true,
+  })
+  return res.data as ImageGenerationResponse
+}
+
+export async function createVideo(
+  payload: VideoGenerationRequest,
+  signal?: AbortSignal
+): Promise<VideoGenerationResponse> {
+  const res = await api.post(API_ENDPOINTS.VIDEO_GENERATIONS, payload, {
+    signal,
+    skipErrorHandler: true,
+  })
+  return res.data as VideoGenerationResponse
+}
+
+export async function getVideoStatus(
+  taskId: string,
+  signal?: AbortSignal
+): Promise<VideoStatusResponse> {
+  const res = await api.get(
+    `${API_ENDPOINTS.VIDEO_GENERATIONS}/${encodeURIComponent(taskId)}`,
+    {
+      signal,
+      skipErrorHandler: true,
+    }
+  )
+  return res.data as VideoStatusResponse
+}
+
+export async function cancelVideo(
+  taskId: string,
+  signal?: AbortSignal
+): Promise<void> {
+  await api.delete(
+    `${API_ENDPOINTS.VIDEO_GENERATIONS}/${encodeURIComponent(taskId)}`,
+    {
+      signal,
+      skipErrorHandler: true,
+    }
+  )
+}
+
+export async function getVideoContent(
+  taskId: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const res = await api.get(
+    `${API_ENDPOINTS.VIDEO_GENERATIONS}/${encodeURIComponent(taskId)}/content`,
+    {
+      responseType: 'blob',
+      signal,
+      skipErrorHandler: true,
+      disableDuplicate: true,
+    }
+  )
+  return URL.createObjectURL(res.data as Blob)
 }
 
 /**

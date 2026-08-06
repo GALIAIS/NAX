@@ -165,6 +165,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, fmt.Errorf("request not found in context")
 	}
 	req := v.(relaycommon.TaskSubmitReq)
+	if uploaded, imageErr := relaycommon.MultipartImageData(c); imageErr != nil {
+		return nil, imageErr
+	} else if len(uploaded) > 0 {
+		req.Images = append(uploaded, req.ImageList()...)
+	}
 
 	body, err := a.convertToRequestPayload(&req, info)
 	if err != nil {
@@ -260,17 +265,35 @@ func (a *TaskAdaptor) GetChannelName() string {
 	return "kling"
 }
 
+func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return nil
+	}
+	seconds := req.RequestedDurationSeconds()
+	if seconds <= 0 {
+		seconds = 5
+	}
+	if seconds > relaycommon.MaxTaskDurationSeconds {
+		seconds = relaycommon.MaxTaskDurationSeconds
+	}
+	return map[string]float64{"seconds": seconds}
+}
+
 // ============================
 // helpers
 // ============================
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*requestPayload, error) {
+	seconds := req.RequestedDurationSeconds()
+	if seconds <= 0 {
+		seconds = 5
+	}
 	r := requestPayload{
 		Prompt:         req.Prompt,
-		Image:          req.Image,
 		Mode:           taskcommon.DefaultString(req.Mode, "std"),
-		Duration:       fmt.Sprintf("%d", taskcommon.DefaultInt(req.Duration, 5)),
-		AspectRatio:    a.getAspectRatio(req.Size),
+		Duration:       fmt.Sprintf("%d", int(math.Ceil(seconds))),
+		AspectRatio:    taskcommon.DefaultString(req.AspectRatio, a.getAspectRatio(req.Size)),
 		ModelName:      info.UpstreamModelName,
 		Model:          info.UpstreamModelName,
 		CfgScale:       0.5,
@@ -283,6 +306,12 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 	if r.ModelName == "" {
 		r.ModelName = "kling-v1"
 		r.Model = "kling-v1"
+	}
+	if images := req.ImageList(); len(images) > 0 {
+		r.Image = images[0]
+		if len(images) > 1 {
+			r.ImageTail = images[1]
+		}
 	}
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
@@ -347,16 +376,26 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	taskInfo.Reason = resPayload.Data.TaskStatusMsg
 	//任务状态，枚举值：submitted（已提交）、processing（处理中）、succeed（成功）、failed（失败）
 	status := resPayload.Data.TaskStatus
-	switch status {
-	case "submitted":
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "submitted", "queued", "pending", "created":
 		taskInfo.Status = model.TaskStatusSubmitted
-	case "processing":
+	case "processing", "in_progress", "running":
 		taskInfo.Status = model.TaskStatusInProgress
-	case "succeed":
+	case "succeed", "succeeded", "success", "completed", "done":
 		taskInfo.Status = model.TaskStatusSuccess
 		if videos := resPayload.Data.TaskResult.Videos; len(videos) > 0 {
 			video := videos[0]
 			taskInfo.Url = video.Url
+			if duration, parseErr := strconv.ParseFloat(strings.TrimSpace(video.Duration), 64); parseErr == nil && duration > 0 {
+				taskInfo.DurationSeconds = duration
+			}
+			taskInfo.OutputCount = len(videos)
+		}
+		if taskInfo.OutputCount == 0 {
+			taskInfo.OutputCount = 1
+		}
+		if elapsed := providerElapsedSeconds(resPayload.Data.CreatedAt, resPayload.Data.UpdatedAt); elapsed > 0 {
+			taskInfo.TotalSeconds = elapsed
 		}
 		if tokens, err := strconv.ParseFloat(resPayload.Data.FinalUnitDeduction, 64); err == nil {
 			// 上游返回的扣费数值，饱和转换防止超大数值回绕成负数
@@ -366,12 +405,22 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 				taskInfo.TotalTokens = rounded
 			}
 		}
-	case "failed":
+	case "failed", "cancelled", "canceled", "error":
 		taskInfo.Status = model.TaskStatusFailure
 	default:
 		return nil, fmt.Errorf("unknown task status: %s", status)
 	}
 	return taskInfo, nil
+}
+
+func providerElapsedSeconds(createdAt, updatedAt int64) float64 {
+	if createdAt <= 0 || updatedAt <= createdAt {
+		return 0
+	}
+	if createdAt > 1_000_000_000_000 || updatedAt > 1_000_000_000_000 {
+		return float64(updatedAt-createdAt) / 1000
+	}
+	return float64(updatedAt - createdAt)
 }
 
 func isNewAPIRelay(apiKey string) bool {

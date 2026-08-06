@@ -16,10 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useCallback } from 'react'
+
 import { PlaygroundChat } from './components/chat/playground-chat'
 import { PlaygroundInput } from './components/input/playground-input'
 import {
   useChatHandler,
+  useMediaGeneration,
   usePlaygroundConversation,
   usePlaygroundOptions,
   usePlaygroundState,
@@ -48,6 +51,30 @@ export function Playground() {
   })
 
   const {
+    sendMedia,
+    stopGeneration: stopMediaGeneration,
+    isGenerating: isMediaGenerating,
+  } = useMediaGeneration({
+    config,
+    onMessageUpdate: updateMessages,
+  })
+  const sendRequest = useCallback(
+    (nextMessages: typeof messages) => {
+      if (config.mode === 'chat') {
+        sendChat(nextMessages)
+      } else {
+        void sendMedia(nextMessages)
+      }
+    },
+    [config.mode, sendChat, sendMedia]
+  )
+  const handleStopGeneration = useCallback(() => {
+    stopGeneration()
+    stopMediaGeneration()
+  }, [stopGeneration, stopMediaGeneration])
+  const generationActive = isGenerating || isMediaGenerating
+
+  const {
     editingMessageKey,
     handleSendMessage,
     handleRegenerateMessage,
@@ -58,7 +85,7 @@ export function Playground() {
   } = usePlaygroundConversation({
     messages,
     updateMessages,
-    sendChat,
+    sendChat: sendRequest,
   })
 
   const handleClearMessages = () => {
@@ -85,7 +112,7 @@ export function Playground() {
           onEditMessage={handleEditMessage}
           onDeleteMessage={handleDeleteMessage}
           onSelectPrompt={handleSendMessage}
-          isGenerating={isGenerating}
+          isGenerating={generationActive}
           editingKey={editingMessageKey}
           onCancelEdit={handleEditOpenChange}
           onSaveEdit={(newContent) => applyEdit(newContent, false)}
@@ -97,19 +124,20 @@ export function Playground() {
       <div className='mx-auto w-full max-w-4xl'>
         <PlaygroundInput
           config={config}
-          disabled={isGenerating}
+          disabled={generationActive}
           groups={groups}
           groupValue={config.group}
-          isGenerating={isGenerating}
+          isGenerating={generationActive}
           isModelLoading={isLoadingModels}
           modelValue={config.model}
           models={models}
           onGroupChange={(value) => updateConfig('group', value)}
           onConfigChange={updateConfig}
           onClearMessages={handleClearMessages}
+          onModeChange={(value) => updateConfig('mode', value)}
           onModelChange={(value) => updateConfig('model', value)}
           onParameterEnabledChange={updateParameterEnabled}
-          onStop={stopGeneration}
+          onStop={handleStopGeneration}
           onSubmit={handleSendMessage}
           parameterEnabled={parameterEnabled}
           hasMessages={messages.length > 0}

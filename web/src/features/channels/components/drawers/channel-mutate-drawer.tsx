@@ -2662,55 +2662,44 @@ export function ChannelMutateDrawer({
                                     >
                                       {t('API Base URL *')}
                                     </FormLabel>
-                                    <Select
-                                      items={[
-                                        {
-                                          value:
-                                            'https://ark.cn-beijing.volces.com',
-                                          label: t(
-                                            'https://ark.cn-beijing.volces.com'
-                                          ),
-                                        },
-                                        {
-                                          value:
-                                            'https://ark.ap-southeast.bytepluses.com',
-                                          label: t(
-                                            'https://ark.ap-southeast.bytepluses.com'
-                                          ),
-                                        },
-                                      ]}
-                                      onValueChange={field.onChange}
-                                      value={
-                                        field.value === 'doubao-coding-plan'
-                                          ? 'https://ark.cn-beijing.volces.com'
-                                          : field.value ||
-                                            'https://ark.cn-beijing.volces.com'
-                                      }
-                                    >
-                                      <FormControl>
-                                        <SelectTrigger>
-                                          <SelectValue />
-                                        </SelectTrigger>
-                                      </FormControl>
-                                      <SelectContent
-                                        alignItemWithTrigger={false}
-                                      >
-                                        <SelectGroup>
-                                          <SelectItem value='https://ark.cn-beijing.volces.com'>
-                                            {t(
+                                    <FormControl>
+                                      <Combobox
+                                        options={[
+                                          {
+                                            value:
+                                              'https://ark.cn-beijing.volces.com',
+                                            label:
+                                              'https://ark.cn-beijing.volces.com',
+                                          },
+                                          {
+                                            value:
+                                              'https://ark.ap-southeast.bytepluses.com',
+                                            label:
+                                              'https://ark.ap-southeast.bytepluses.com',
+                                          },
+                                        ]}
+                                        allowCustomValue
+                                        openOnFocus={false}
+                                        placeholder={t(
+                                          'Type or select an API endpoint'
+                                        )}
+                                        searchPlaceholder={t(
+                                          'Type or select an API endpoint'
+                                        )}
+                                        onValueChange={field.onChange}
+                                        value={
+                                          field.value === 'doubao-coding-plan'
+                                            ? 'https://ark.cn-beijing.volces.com'
+                                            : field.value ||
                                               'https://ark.cn-beijing.volces.com'
-                                            )}
-                                          </SelectItem>
-                                          <SelectItem value='https://ark.ap-southeast.bytepluses.com'>
-                                            {t(
-                                              'https://ark.ap-southeast.bytepluses.com'
-                                            )}
-                                          </SelectItem>
-                                        </SelectGroup>
-                                      </SelectContent>
-                                    </Select>
+                                        }
+                                        className='font-mono text-xs'
+                                      />
+                                    </FormControl>
                                     <FormDescription>
-                                      {t('Select the API endpoint region')}
+                                      {t(
+                                        'Select a preset or type any compatible API endpoint; custom values are preserved.'
+                                      )}
                                     </FormDescription>
                                     <FormMessage />
                                   </FormItem>
@@ -4006,19 +3995,22 @@ export function ChannelMutateDrawer({
                                       </div>
                                     </div>
                                     <FormControl>
-                                      <JsonCodeEditor
+                                      <JsonEditor
                                         value={field.value || ''}
                                         onChange={field.onChange}
-                                        name={field.name}
-                                        onBlur={field.onBlur}
-                                        textareaRef={field.ref}
                                         disabled={
                                           sensitiveLocked || isSubmitting
                                         }
-                                        placeholder={t(
-                                          'Enter JSON to override request headers'
+                                        keyPlaceholder={t('Header name')}
+                                        valuePlaceholder={t(
+                                          'Header value, true, or false'
                                         )}
-                                        heightClassName='h-40 min-h-40 max-h-40'
+                                        keyLabel={t('Header name')}
+                                        valueLabel={t('Header value')}
+                                        emptyMessage={t(
+                                          'No request header overrides configured.'
+                                        )}
+                                        valueType='any'
                                       />
                                     </FormControl>
                                     <FormDescription className='text-xs'>
@@ -4233,9 +4225,7 @@ export function ChannelMutateDrawer({
                                         <SelectValue />
                                       </SelectTrigger>
                                     </FormControl>
-                                    <SelectContent
-                                      alignItemWithTrigger={false}
-                                    >
+                                    <SelectContent alignItemWithTrigger={false}>
                                       <SelectGroup>
                                         <SelectItem value='auto'>
                                           {t('Auto')}
@@ -4799,6 +4789,7 @@ export function ChannelMutateDrawer({
         <AdvancedCustomEditorDialog
           open={advancedCustomEditorOpen}
           value={form.watch('advanced_custom') || ''}
+          availableModels={currentModelsArray}
           onOpenChange={setAdvancedCustomEditorOpen}
           onSave={(nextValue) => {
             form.setValue('advanced_custom', nextValue, {

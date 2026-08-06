@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -106,10 +108,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 		return nil
 	}
 
-	seconds, _ := strconv.Atoi(req.Seconds)
-	if seconds == 0 {
-		seconds = req.Duration
-	}
+	seconds := int(math.Ceil(req.RequestedDurationSeconds()))
 	if seconds <= 0 {
 		seconds = 4
 	}
@@ -279,6 +278,31 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	return client.Do(req)
 }
 
+func (a *TaskAdaptor) CancelTask(baseURL, key, taskID, proxy string) error {
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("invalid task_id")
+	}
+	uri := strings.TrimRight(baseURL, "/") + "/v1/videos/" + url.PathEscape(taskID)
+	req, err := http.NewRequest(http.MethodDelete, uri, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	client, err := service.GetHttpClientWithProxy(proxy)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("upstream cancel returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (a *TaskAdaptor) GetModelList() []string {
 	return ModelList
 }
@@ -297,15 +321,15 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		Code: 0,
 	}
 
-	switch resTask.Status {
-	case "queued", "pending":
+	switch strings.ToLower(strings.TrimSpace(resTask.Status)) {
+	case "queued", "pending", "submitted", "created":
 		taskResult.Status = model.TaskStatusQueued
-	case "processing", "in_progress":
+	case "processing", "in_progress", "running":
 		taskResult.Status = model.TaskStatusInProgress
-	case "completed":
+	case "completed", "succeeded", "success", "done":
 		taskResult.Status = model.TaskStatusSuccess
 		// Url intentionally left empty — the caller constructs the proxy URL using the public task ID
-	case "failed", "cancelled":
+	case "failed", "cancelled", "canceled", "error":
 		taskResult.Status = model.TaskStatusFailure
 		if resTask.Error != nil {
 			taskResult.Reason = resTask.Error.Message
@@ -313,12 +337,34 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 			taskResult.Reason = "task failed"
 		}
 	default:
+		// Preserve forward compatibility with new provider progress states.
+		taskResult.Status = model.TaskStatusInProgress
+		taskResult.Progress = "30%"
 	}
 	if resTask.Progress > 0 && resTask.Progress < 100 {
 		taskResult.Progress = fmt.Sprintf("%d%%", resTask.Progress)
 	}
+	if seconds, err := strconv.ParseFloat(strings.TrimSpace(resTask.Seconds), 64); err == nil && seconds > 0 {
+		taskResult.DurationSeconds = seconds
+	}
+	if elapsed := providerElapsedSeconds(resTask.CreatedAt, resTask.CompletedAt); elapsed > 0 {
+		taskResult.TotalSeconds = elapsed
+	}
+	if taskResult.Status == model.TaskStatusSuccess {
+		taskResult.OutputCount = 1
+	}
 
 	return &taskResult, nil
+}
+
+func providerElapsedSeconds(createdAt, completedAt int64) float64 {
+	if createdAt <= 0 || completedAt <= createdAt {
+		return 0
+	}
+	if createdAt > 1_000_000_000_000 || completedAt > 1_000_000_000_000 {
+		return float64(completedAt-createdAt) / 1000
+	}
+	return float64(completedAt - createdAt)
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {

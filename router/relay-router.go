@@ -69,7 +69,10 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
-	relayV1Router.Use(middleware.TokenAuth())
+	// Dashboard users (including the playground) may call the same compatible
+	// endpoints as API-token clients. TokenOrUserAuth keeps the original token
+	// path while accepting a validated dashboard session when present.
+	relayV1Router.Use(middleware.TokenOrUserAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{
 		// WebSocket 路由（统一到 Relay）

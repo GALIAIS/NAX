@@ -25,6 +25,7 @@ export const MAX_LOADED_MESSAGES_CHARS = 120_000
 export const MAX_LOADED_MESSAGE_CHARS = 40_000
 
 export const playgroundConfigSchema = z.object({
+  mode: z.enum(['chat', 'image', 'video']).optional(),
   model: z.string().optional(),
   group: z.string().optional(),
   temperature: z.number().optional(),
@@ -34,6 +35,13 @@ export const playgroundConfigSchema = z.object({
   presence_penalty: z.number().optional(),
   seed: z.number().nullable().optional(),
   stream: z.boolean().optional(),
+  image_size: z.string().optional(),
+  image_quality: z.enum(['auto', 'standard', 'hd']).optional(),
+  image_n: z.number().optional(),
+  image_response_format: z.enum(['url', 'b64_json']).optional(),
+  video_size: z.string().optional(),
+  video_seconds: z.number().optional(),
+  video_quality: z.string().optional(),
 })
 
 export const parameterEnabledSchema = z.object({
@@ -71,6 +79,13 @@ const reasoningSchema = z.object({
   durationMs: z.number().optional(),
 })
 
+const mediaSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  url: z.string(),
+  alt: z.string().optional(),
+  mimeType: z.string().optional(),
+})
+
 const messageSchema = z.object({
   key: z.string(),
   from: messageRoleSchema,
@@ -86,6 +101,7 @@ const messageSchema = z.object({
   isContentComplete: z.boolean().optional(),
   status: messageStatusSchema.optional(),
   errorCode: z.string().nullable().optional(),
+  media: z.array(mediaSchema).optional(),
 })
 
 export const messagesSchema = z.array(messageSchema)

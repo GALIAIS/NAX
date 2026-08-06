@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -164,6 +166,22 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			}
 			req.Images = images
 		}
+		if len(req.Images) == 0 {
+			values, imageErr := relaycommon.MultipartImageData(c, "image", "images", "first_frame_image", "last_frame_image", "reference_images")
+			if imageErr != nil {
+				return nil, imageErr
+			}
+			if len(values) > 0 {
+				if len(values) == 1 {
+					info.Action = constant.TaskActionGenerate
+				} else {
+					info.Action = constant.TaskActionFirstTailGenerate
+				}
+				for _, value := range values {
+					req.Images = append(req.Images, stripImageDataURI(value))
+				}
+			}
+		}
 	}
 
 	body, err := a.convertToRequestPayload(&req, info)
@@ -175,6 +193,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 	return bytes.NewReader(data), nil
+}
+
+func stripImageDataURI(value string) string {
+	if index := strings.Index(value, ","); strings.HasPrefix(value, "data:") && index >= 0 {
+		return value[index+1:]
+	}
+	return value
 }
 
 // DoRequest delegates to common helper.
@@ -267,6 +292,21 @@ func (a *TaskAdaptor) GetModelList() []string {
 
 func (a *TaskAdaptor) GetChannelName() string {
 	return "jimeng"
+}
+
+func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return nil
+	}
+	seconds := req.RequestedDurationSeconds()
+	if seconds <= 0 {
+		seconds = 5
+	}
+	if seconds > relaycommon.MaxTaskDurationSeconds {
+		seconds = relaycommon.MaxTaskDurationSeconds
+	}
+	return map[string]float64{"seconds": seconds}
 }
 
 func (a *TaskAdaptor) signRequest(req *http.Request, accessKey, secretKey string) error {
@@ -385,7 +425,8 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		Prompt: req.Prompt,
 	}
 
-	switch req.Duration {
+	duration := req.RequestedDurationSeconds()
+	switch int(math.Ceil(duration)) {
 	case 10:
 		r.Frames = 241 // 24*10+1 = 241
 	default:
@@ -393,11 +434,12 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 	}
 
 	// Handle one-of image_urls or binary_data_base64
-	if req.HasImage() {
-		if strings.HasPrefix(req.Images[0], "http") {
-			r.ImageUrls = req.Images
+	images := req.ImageList()
+	if len(images) > 0 {
+		if strings.HasPrefix(images[0], "http") {
+			r.ImageUrls = images
 		} else {
-			r.BinaryDataBase64 = req.Images
+			r.BinaryDataBase64 = images
 		}
 	}
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
@@ -406,7 +448,7 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 
 	// 即梦视频3.0 ReqKey转换
 	// https://www.volcengine.com/docs/85621/1792707
-	imageLen := lo.Max([]int{len(req.Images), len(r.BinaryDataBase64), len(r.ImageUrls)})
+	imageLen := lo.Max([]int{len(images), len(r.BinaryDataBase64), len(r.ImageUrls)})
 	if strings.Contains(r.ReqKey, "jimeng_v30") {
 		if r.ReqKey == "jimeng_v30_pro" {
 			// 3.0 pro只有固定的jimeng_ti2v_v30_pro
@@ -440,15 +482,37 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
 	}
-	switch resTask.Data.Status {
-	case "in_queue":
+	switch strings.ToLower(strings.TrimSpace(resTask.Data.Status)) {
+	case "in_queue", "queued", "pending", "submitted":
 		taskResult.Status = model.TaskStatusQueued
 		taskResult.Progress = "10%"
-	case "done":
+	case "processing", "generating", "running":
+		taskResult.Status = model.TaskStatusInProgress
+		taskResult.Progress = "50%"
+	case "done", "success", "succeeded", "completed":
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Progress = "100%"
+		taskResult.OutputCount = 1
+	case "failed", "error", "cancelled", "canceled":
+		taskResult.Status = model.TaskStatusFailure
+		taskResult.Progress = "100%"
+		if taskResult.Reason == "" {
+			taskResult.Reason = "task failed"
+		}
+	default:
+		// Providers occasionally add a transient state (for example
+		// `waiting_for_resources`). Keep polling instead of treating it as an
+		// empty result, which would incorrectly fail/refund the task.
+		taskResult.Status = model.TaskStatusInProgress
+		taskResult.Progress = "30%"
 	}
 	taskResult.Url = resTask.Data.VideoUrl
+	if elapsedText := strings.TrimSpace(strings.TrimSuffix(resTask.TimeElapsed, "s")); elapsedText != "" {
+		if elapsed, parseErr := strconv.ParseFloat(elapsedText, 64); parseErr == nil && elapsed > 0 {
+			taskResult.ProcessingSeconds = elapsed
+			taskResult.TotalSeconds = elapsed
+		}
+	}
 	return &taskResult, nil
 }
 

@@ -260,6 +260,7 @@ export interface MidjourneyLog {
   id: number
   user_id: number
   channel_id: number
+  quota?: number
   code: number
   mj_id: string
   action: string // IMAGINE, UPSCALE, VARIATION, etc. (backend field name)
@@ -284,6 +285,29 @@ export interface MidjourneyLog {
 // Task Logs Types
 // ============================================================================
 
+export interface TaskTiming {
+  requested_duration_seconds?: number
+  actual_duration_seconds?: number
+  requested_output_count?: number
+  actual_output_count?: number
+  queue_seconds?: number
+  processing_seconds?: number
+  total_seconds?: number
+  poll_count?: number
+  last_polled_at?: number
+}
+
+export interface TaskBillingSummary {
+  mode?: 'per_call' | 'dynamic' | string
+  pre_consumed_quota?: number
+  actual_quota?: number
+  model_price?: number
+  model_ratio?: number
+  group_ratio?: number
+  other_ratios?: Record<string, number>
+  settled?: boolean
+}
+
 export interface TaskLog {
   id: number
   user_id: number
@@ -292,12 +316,15 @@ export interface TaskLog {
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
+  quota?: number
   submit_time: number // seconds
   finish_time?: number // seconds
   progress?: string
   progress_message_en?: string
   data?: string // JSON string
   fail_reason?: string
+  billing?: TaskBillingSummary
+  timing?: TaskTiming
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
   other?: string
   created_at?: number

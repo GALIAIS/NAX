@@ -21,6 +21,10 @@ import { useEffect, useCallback } from 'react'
 import { DEFAULT_SYSTEM_NAME, DEFAULT_LOGO } from '@/lib/constants'
 import { applyFaviconToDom } from '@/lib/dom-utils'
 import {
+  DEFAULT_GLOBAL_THEME_SETTINGS,
+  normalizeGlobalThemeSettings,
+} from '@/lib/theme-customization'
+import {
   useSystemConfigStore,
   type CurrencyConfig,
   type CurrencyDisplayType,
@@ -47,6 +51,7 @@ interface StatusApiResponse {
     usd_exchange_rate?: number
     custom_currency_symbol?: string
     custom_currency_exchange_rate?: number
+    global_theme?: unknown
   }
 }
 
@@ -99,6 +104,9 @@ export function mapStatusDataToConfig(
     demoSiteEnabled: data.demo_site_enabled,
     displayTokenStatEnabled: data.display_token_stat_enabled,
     currency,
+    globalTheme: normalizeGlobalThemeSettings(
+      data.global_theme ?? DEFAULT_GLOBAL_THEME_SETTINGS
+    ),
   }
 }
 
@@ -120,13 +128,13 @@ function preloadImage(
   onError: () => void
 ): () => void {
   const img = new Image()
-  img.onload = onLoad
-  img.onerror = onError
+  img.addEventListener('load', onLoad, { once: true })
+  img.addEventListener('error', onError, { once: true })
   img.src = src
 
   return () => {
-    img.onload = null
-    img.onerror = null
+    img.removeEventListener('load', onLoad)
+    img.removeEventListener('error', onError)
   }
 }
 

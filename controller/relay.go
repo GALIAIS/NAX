@@ -591,15 +591,27 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
 		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios(),
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+			ModelPrice:       relayInfo.PriceData.ModelPrice,
+			GroupRatio:       relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+			ModelRatio:       relayInfo.PriceData.ModelRatio,
+			OtherRatios:      relayInfo.PriceData.OtherRatios(),
+			OriginModelName:  relayInfo.OriginModelName,
+			PreConsumedQuota: result.Quota,
+			// A priced task with explicit duration/count ratios still needs
+			// terminal settlement when the provider reports actual output. Pure
+			// per-call tasks (no dynamic ratios) retain the historical behavior.
+			PerCallBilling: common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) ||
+				(relayInfo.PriceData.UsePrice && len(relayInfo.PriceData.OtherRatios()) == 0),
 		}
+		if req, requestErr := relaycommon.GetTaskRequest(c); requestErr == nil {
+			task.PrivateData.Timing = service.BuildTaskTimingSnapshot(req)
+		}
+		if task.PrivateData.Timing == nil {
+			task.PrivateData.Timing = &taskdto.TaskTiming{}
+		}
+		service.ApplyTaskTimingBillingRatios(task.PrivateData.Timing, relayInfo.PriceData.OtherRatios())
 		task.Quota = result.Quota
-		task.Data = result.TaskData
+		task.Data = service.RedactVideoResponseBody(result.TaskData)
 		task.Action = relayInfo.Action
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())

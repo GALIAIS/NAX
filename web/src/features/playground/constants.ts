@@ -35,6 +35,8 @@ export const MESSAGE_STATUS = {
 // API endpoints
 export const API_ENDPOINTS = {
   CHAT_COMPLETIONS: '/pg/chat/completions',
+  IMAGE_GENERATIONS: '/v1/images/generations',
+  VIDEO_GENERATIONS: '/v1/videos',
   USER_MODELS: '/api/user/models',
   USER_GROUPS: '/api/user/self/groups',
 } as const
@@ -45,6 +47,7 @@ export const DEFAULT_GROUP = 'default' as const
 
 // Default configuration
 export const DEFAULT_CONFIG: PlaygroundConfig = {
+  mode: 'chat',
   model: 'gpt-4o',
   group: DEFAULT_GROUP,
   temperature: 0.7,
@@ -54,6 +57,13 @@ export const DEFAULT_CONFIG: PlaygroundConfig = {
   presence_penalty: 0,
   seed: null,
   stream: true,
+  image_size: '1024x1024',
+  image_quality: 'auto',
+  image_n: 1,
+  image_response_format: 'url',
+  video_size: '1280x720',
+  video_seconds: 5,
+  video_quality: 'standard',
 }
 
 export const DEFAULT_PARAMETER_ENABLED: ParameterEnabled = {

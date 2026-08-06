@@ -132,6 +132,13 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				other[k] = v
 			}
 		}
+		if bc.PreConsumedQuota > 0 {
+			other["pre_consumed_quota"] = bc.PreConsumedQuota
+		}
+		other["actual_quota"] = task.Quota
+	}
+	if task.PrivateData.Timing != nil {
+		other["timing"] = task.PrivateData.Timing
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
@@ -139,6 +146,49 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
 	return other
+}
+
+// RecalculateTaskQuotaByActualVideo adjusts a duration/count-based reservation
+// when the provider reports the actual output. It deliberately works from the
+// already-reserved task quota, so it preserves model/group/provider ratios and
+// cannot accidentally apply a second base-price conversion.
+func RecalculateTaskQuotaByActualVideo(ctx context.Context, task *model.Task, result *relaycommon.TaskInfo) bool {
+	if task == nil || result == nil || task.Quota <= 0 {
+		return false
+	}
+	bc := task.PrivateData.BillingContext
+	if bc == nil || len(bc.OtherRatios) == 0 {
+		return false
+	}
+
+	adjusted := float64(task.Quota)
+	changed := false
+	if requested := bc.OtherRatios["seconds"]; requested > 0 && result.DurationSeconds > 0 {
+		actual := result.DurationSeconds
+		if actual > relaycommon.MaxTaskDurationSeconds {
+			actual = relaycommon.MaxTaskDurationSeconds
+		}
+		adjusted = adjusted / requested * actual
+		changed = true
+	}
+	if requested := bc.OtherRatios["count"]; requested > 0 && result.OutputCount > 0 {
+		actual := result.OutputCount
+		if actual > relaycommon.MaxTaskOutputCount {
+			actual = relaycommon.MaxTaskOutputCount
+		}
+		adjusted = adjusted / requested * float64(actual)
+		changed = true
+	}
+	if !changed {
+		return false
+	}
+
+	actualQuota, clamp := common.QuotaFromFloatChecked(adjusted)
+	if actualQuota <= 0 {
+		return false
+	}
+	reason := fmt.Sprintf("视频实际参数结算：duration=%.3f, count=%d", result.DurationSeconds, result.OutputCount)
+	return RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
 }
 
 func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData {
@@ -166,6 +216,7 @@ func taskModelName(task *model.Task) string {
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {
+		markTaskBillingSettled(ctx, task)
 		return true
 	}
 
@@ -197,19 +248,39 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 4. 资金退款完成后再清除持久化标记。
 	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
 	task.Quota = 0
-	if err := task.UpdateQuota(); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
+	if task.ID > 0 {
+		if err := task.UpdateQuota(); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
+		}
 	}
+	markTaskBillingSettled(ctx, task)
 	return true
+}
+
+func markTaskBillingSettled(ctx context.Context, task *model.Task) {
+	if task == nil || task.PrivateData.BillingContext == nil {
+		return
+	}
+	task.PrivateData.BillingContext.Settled = true
+	// Unit callers may construct an in-memory task without inserting it. The
+	// settlement marker is still useful to the caller, but attempting Save on a
+	// zero primary key makes GORM issue a WHERE-less update and hides the real
+	// billing result behind an avoidable database error.
+	if task.ID == 0 {
+		return
+	}
+	if err := task.Update(); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("任务 %s 计费状态回写失败: %v", task.TaskID, err))
+	}
 }
 
 // RecalculateTaskQuota 通用的异步差额结算。
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
 // clamps 可选：若计算 actualQuota 时发生额度饱和，将其记入日志 admin_info（仅管理员可见）。
-func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) {
+func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) bool {
 	if actualQuota <= 0 {
-		return
+		return false
 	}
 	preConsumedQuota := task.Quota
 	quotaDelta := actualQuota - preConsumedQuota
@@ -217,7 +288,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	if quotaDelta == 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
 			task.TaskID, logger.LogQuota(actualQuota), reason))
-		return
+		return true
 	}
 
 	logger.LogInfo(ctx, fmt.Sprintf("任务 %s 差额结算：delta=%s（实际：%s，预扣：%s，%s）",
@@ -231,15 +302,18 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	// 调整资金来源
 	if err := taskAdjustFunding(task, quotaDelta); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("差额结算资金调整失败 task %s: %s", task.TaskID, err.Error()))
-		return
+		return false
 	}
 
 	// 调整令牌额度
 	taskAdjustTokenQuota(ctx, task, quotaDelta)
 
 	task.Quota = actualQuota
-	if err := task.UpdateQuota(); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
+	if task.ID > 0 {
+		if err := task.UpdateQuota(); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
+			return false
+		}
 	}
 
 	var logType int
@@ -272,6 +346,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		Other:     other,
 		NodeName:  task.PrivateData.NodeName,
 	})
+	return true
 }
 
 // RecalculateTaskQuotaByTokens 根据实际 token 消耗重新计费（异步差额结算）。

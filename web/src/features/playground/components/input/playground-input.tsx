@@ -40,6 +40,7 @@ interface PlaygroundInputProps {
   config: PlaygroundConfig
   onSubmit: (text: string) => void
   onStop?: () => void
+  onModeChange: (mode: PlaygroundConfig['mode']) => void
   disabled?: boolean
   isGenerating?: boolean
   models: ModelOption[]
@@ -66,6 +67,7 @@ export function PlaygroundInput({
   config,
   onSubmit,
   onStop,
+  onModeChange,
   disabled,
   isGenerating,
   models,
@@ -83,6 +85,12 @@ export function PlaygroundInput({
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
+  let placeholder = t('Ask anything')
+  if (config.mode === 'image') {
+    placeholder = t('Describe the image you want to create')
+  } else if (config.mode === 'video') {
+    placeholder = t('Describe the video you want to create')
+  }
 
   const handleSubmit = (message: PromptInputMessage) => {
     const submittableText = getSubmittableInputText(message, disabled)
@@ -107,7 +115,7 @@ export function PlaygroundInput({
           className='min-h-20 px-5 pt-4 pb-3 leading-7 md:min-h-24 md:text-base'
           disabled={disabled}
           onChange={(event) => setText(event.target.value)}
-          placeholder={t('Ask anything')}
+          placeholder={placeholder}
           value={text}
         />
 
@@ -123,6 +131,8 @@ export function PlaygroundInput({
             onGroupChange={onGroupChange}
             onModelChange={onModelChange}
             onStop={onStop}
+            mode={config.mode}
+            onModeChange={onModeChange}
             text={text}
             tools={
               <PlaygroundInputTools

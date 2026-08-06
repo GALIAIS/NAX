@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -59,6 +60,7 @@ type taskResultResponse struct {
 	State     string     `json:"state"`
 	ErrCode   string     `json:"err_code"`
 	Credits   int        `json:"credits"`
+	Duration  float64    `json:"duration,omitempty"`
 	Payload   string     `json:"payload"`
 	Creations []creation `json:"creations"`
 }
@@ -99,9 +101,9 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		action = constant.TaskActionGenerate
 		if info.ChannelType == constant.ChannelTypeVidu {
 			// vidu 增加 首尾帧生视频和参考图生视频
-			if len(req.Images) == 2 {
+			if len(req.ImageList()) == 2 {
 				action = constant.TaskActionFirstTailGenerate
-			} else if len(req.Images) > 2 {
+			} else if len(req.ImageList()) > 2 {
 				action = constant.TaskActionReferenceGenerate
 			}
 		}
@@ -116,6 +118,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, fmt.Errorf("request not found in context")
 	}
 	req := v.(relaycommon.TaskSubmitReq)
+	if uploaded, imageErr := relaycommon.MultipartImageData(c); imageErr != nil {
+		return nil, imageErr
+	} else if len(uploaded) > 0 {
+		req.Images = append(uploaded, req.ImageList()...)
+	}
 
 	body, err := a.convertToRequestPayload(&req, info)
 	if err != nil {
@@ -221,16 +228,35 @@ func (a *TaskAdaptor) GetChannelName() string {
 	return "vidu"
 }
 
+func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return nil
+	}
+	seconds := req.RequestedDurationSeconds()
+	if seconds <= 0 {
+		seconds = 5
+	}
+	if seconds > relaycommon.MaxTaskDurationSeconds {
+		seconds = relaycommon.MaxTaskDurationSeconds
+	}
+	return map[string]float64{"seconds": seconds}
+}
+
 // ============================
 // helpers
 // ============================
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*requestPayload, error) {
+	duration := 5
+	if seconds := req.RequestedDurationSeconds(); seconds > 0 {
+		duration = int(math.Ceil(seconds))
+	}
 	r := requestPayload{
 		Model:             taskcommon.DefaultString(info.UpstreamModelName, "viduq1"),
-		Images:            req.Images,
+		Images:            req.ImageList(),
 		Prompt:            req.Prompt,
-		Duration:          taskcommon.DefaultInt(req.Duration, 5),
+		Duration:          duration,
 		Resolution:        taskcommon.DefaultString(req.Size, "1080p"),
 		MovementAmplitude: "auto",
 		Bgm:               false,
@@ -250,18 +276,23 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		return nil, errors.Wrap(err, "failed to unmarshal response body")
 	}
 
-	state := taskResp.State
+	state := strings.ToLower(strings.TrimSpace(taskResp.State))
 	switch state {
-	case "created", "queueing":
+	case "created", "queueing", "queued", "pending", "submitted":
 		taskInfo.Status = model.TaskStatusSubmitted
-	case "processing":
+	case "processing", "running", "in_progress":
 		taskInfo.Status = model.TaskStatusInProgress
-	case "success":
+	case "success", "succeeded", "completed", "done":
 		taskInfo.Status = model.TaskStatusSuccess
+		taskInfo.DurationSeconds = taskResp.Duration
+		taskInfo.OutputCount = len(taskResp.Creations)
+		if taskInfo.OutputCount == 0 {
+			taskInfo.OutputCount = 1
+		}
 		if len(taskResp.Creations) > 0 {
 			taskInfo.Url = taskResp.Creations[0].URL
 		}
-	case "failed":
+	case "failed", "error", "cancelled", "canceled":
 		taskInfo.Status = model.TaskStatusFailure
 		if taskResp.ErrCode != "" {
 			taskInfo.Reason = taskResp.ErrCode

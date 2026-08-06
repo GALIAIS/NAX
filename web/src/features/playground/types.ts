@@ -23,6 +23,15 @@ export type MessageStatus = 'loading' | 'streaming' | 'complete' | 'error'
 
 export type PlaygroundMessageLayoutMode = 'alternating' | 'left'
 
+export type PlaygroundMode = 'chat' | 'image' | 'video'
+
+export type PlaygroundMedia = {
+  kind: 'image' | 'video'
+  url: string
+  alt?: string
+  mimeType?: string
+}
+
 export interface MessageVersion {
   id: string
   content: string
@@ -49,6 +58,7 @@ export interface Message {
   isContentComplete?: boolean
   status?: MessageStatus
   errorCode?: string | null
+  media?: PlaygroundMedia[]
 }
 
 // API payload types
@@ -117,6 +127,7 @@ export interface ChatCompletionResponse {
 
 // Configuration types
 export interface PlaygroundConfig {
+  mode: PlaygroundMode
   model: string
   group: string
   temperature: number
@@ -126,6 +137,13 @@ export interface PlaygroundConfig {
   presence_penalty: number
   seed: number | null
   stream: boolean
+  image_size: string
+  image_quality: 'auto' | 'standard' | 'hd'
+  image_n: number
+  image_response_format: 'url' | 'b64_json'
+  video_size: string
+  video_seconds: number
+  video_quality: string
 }
 
 export interface ParameterEnabled {
@@ -148,4 +166,55 @@ export interface GroupOption {
   value: string
   ratio: number
   desc?: string
+}
+
+export interface ImageGenerationRequest {
+  model: string
+  prompt: string
+  group?: string
+  n?: number
+  size?: string
+  quality?: string
+  response_format?: 'url' | 'b64_json'
+}
+
+export interface ImageGenerationResponse {
+  data?: Array<{
+    url?: string
+    b64_json?: string
+    mime_type?: string
+    mimeType?: string
+    revised_prompt?: string
+  }>
+}
+
+export interface VideoGenerationRequest {
+  model: string
+  prompt: string
+  group?: string
+  size?: string
+  seconds?: string
+  quality?: string
+  n?: number
+}
+
+export interface VideoGenerationResponse {
+  id?: string
+  task_id?: string
+  status?: string
+  metadata?: {
+    url?: string
+    video_url?: string
+    content_url?: string
+  }
+  url?: string
+  video_url?: string
+  content_url?: string
+  output_url?: string
+}
+
+export interface VideoStatusResponse extends VideoGenerationResponse {
+  error?: {
+    message?: string
+  }
 }

@@ -238,6 +238,30 @@ func TestTaskBillingContextPriceDataFiltersMultiplier(t *testing.T) {
 	}, priceData.OtherRatios())
 }
 
+func TestRecalculateTaskQuotaByActualVideoUsesDurationAndOutputCount(t *testing.T) {
+	truncate(t)
+	seedUser(t, 1, 10000)
+	seedChannel(t, 1)
+
+	task := makeTask(1, 1, 10000, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.OtherRatios = map[string]float64{
+		"seconds": 10,
+		"count":   2,
+	}
+	task.PrivateData.BillingContext.PreConsumedQuota = task.Quota
+	require.NoError(t, model.DB.Create(task).Error)
+
+	changed := RecalculateTaskQuotaByActualVideo(context.Background(), task, &relaycommon.TaskInfo{
+		DurationSeconds: 5,
+		OutputCount:     1,
+	})
+
+	assert.True(t, changed)
+	assert.Equal(t, 2500, task.Quota)
+	assert.Equal(t, 17500, getUserQuota(t, 1))
+	assert.Equal(t, 2500, getTaskQuota(t, task.ID))
+}
+
 // ---------------------------------------------------------------------------
 // Read-back helpers
 // ---------------------------------------------------------------------------

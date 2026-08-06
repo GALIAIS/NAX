@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/setting/theme_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -63,17 +64,20 @@ func GetStatus(c *gin.Context) {
 		"linuxdo_minimum_trust_level": common.LinuxDOMinimumTrustLevel,
 		"telegram_oauth":              common.TelegramOAuthEnabled,
 		"telegram_bot_name":           common.TelegramBotName,
-		"theme":                       "default",
-		"system_name":                 common.SystemName,
-		"logo":                        common.Logo,
-		"footer_html":                 common.Footer,
-		"wechat_qrcode":               common.WeChatAccountQRCodeImageURL,
-		"wechat_login":                common.WeChatAuthEnabled,
-		"server_address":              system_setting.ServerAddress,
-		"turnstile_check":             common.TurnstileCheckEnabled,
-		"turnstile_site_key":          common.TurnstileSiteKey,
-		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
-		"quota_per_unit":              common.QuotaPerUnit,
+		// Keep the legacy scalar for older clients; new clients consume the
+		// validated administrator-controlled object below.
+		"theme":              "default",
+		"global_theme":       theme_setting.Parse(common.Interface2String(common.OptionMap[theme_setting.OptionKey])),
+		"system_name":        common.SystemName,
+		"logo":               common.Logo,
+		"footer_html":        common.Footer,
+		"wechat_qrcode":      common.WeChatAccountQRCodeImageURL,
+		"wechat_login":       common.WeChatAuthEnabled,
+		"server_address":     system_setting.ServerAddress,
+		"turnstile_check":    common.TurnstileCheckEnabled,
+		"turnstile_site_key": common.TurnstileSiteKey,
+		"docs_link":          operation_setting.GetGeneralSetting().DocsLink,
+		"quota_per_unit":     common.QuotaPerUnit,
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type
 		"display_in_currency":           operation_setting.IsCurrencyDisplay(),
 		"quota_display_type":            operation_setting.GetQuotaDisplayType(),

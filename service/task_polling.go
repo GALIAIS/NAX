@@ -71,6 +71,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 		} else {
 			task.FailReason = reason
 		}
+		UpdateTaskTiming(task, nil, now)
 
 		won, err := task.UpdateWithStatus(oldStatus)
 		if err != nil {
@@ -296,6 +297,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 			task.Progress = "100%"
 		}
 		task.Data = responseItem.Data
+		UpdateTaskTiming(task, nil, time.Now().Unix())
 
 		// 持久化走 CAS，防止重叠轮询/sweep/多实例/持久化失败重试导致重复退款或覆盖终态。
 		won, err := task.UpdateWithStatus(prevStatus)
@@ -410,9 +412,17 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	if adaptor == nil {
 		return fmt.Errorf("video adaptor not found")
 	}
+	pollingBaseURL := constant.ChannelBaseURLs[cacheGetChannel.Type]
+	if cacheGetChannel.GetBaseURL() != "" {
+		pollingBaseURL = cacheGetChannel.GetBaseURL()
+	}
 	info := &relaycommon.RelayInfo{}
 	info.ChannelMeta = &relaycommon.ChannelMeta{
-		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
+		ChannelType:          cacheGetChannel.Type,
+		ChannelBaseUrl:       pollingBaseURL,
+		ApiKey:               cacheGetChannel.Key,
+		ChannelSetting:       cacheGetChannel.GetSetting(),
+		ChannelOtherSettings: cacheGetChannel.GetOtherSettings(),
 	}
 	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)
@@ -462,6 +472,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,
+		"model":   task.Properties.OriginModelName,
 	}, proxy)
 	if err != nil {
 		return fmt.Errorf("fetchTask failed for task %s: %w", taskId, err)
@@ -475,6 +486,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	logger.LogDebug(ctx, "updateVideoSingleTask response: %s", responseBody)
 
 	snap := task.Snapshot()
+	if isInlineVideoChannel(ch.Type) {
+		if inlineResult := extractInlineVideoDataURL(responseBody); inlineResult != "" {
+			task.PrivateData.InlineResult = inlineResult
+		}
+	}
 
 	taskResult := &relaycommon.TaskInfo{}
 	// try parse as New API response format
@@ -540,14 +556,29 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			task.FinishTime = now
 		}
 		if strings.HasPrefix(taskResult.Url, "data:") {
-			// data: URI (e.g. Vertex base64 encoded video) — keep in Data, not in ResultURL
+			// Keep inline provider output private and expose only the authenticated
+			// content proxy through ResultURL.
+			if isInlineVideoChannel(ch.Type) {
+				task.PrivateData.InlineResult = taskResult.Url
+			}
 			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 		} else if taskResult.Url != "" {
 			// Direct upstream URL (e.g. Kling, Ali, Doubao, etc.)
+			task.PrivateData.InlineResult = ""
 			task.PrivateData.ResultURL = taskResult.Url
 		} else {
-			// No URL from adaptor — construct proxy URL using public task ID
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
+			// Only providers with a dedicated content resolver (Gemini/Vertex)
+			// can safely use the gateway proxy as a placeholder. For other
+			// providers an empty URL is preferable to a self-referential URL that
+			// would make /content recursively call itself.
+			if isInlineVideoChannel(ch.Type) {
+				task.PrivateData.InlineResult = ""
+			}
+			if ch.Type == constant.ChannelTypeGemini || ch.Type == constant.ChannelTypeVertexAi {
+				task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
+			} else {
+				task.PrivateData.ResultURL = ""
+			}
 		}
 		shouldSettle = true
 	case model.TaskStatusFailure:
@@ -569,6 +600,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	if taskResult.Progress != "" {
 		task.Progress = taskResult.Progress
 	}
+	UpdateTaskTiming(task, taskResult, now)
 
 	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 	if isDone && snap.Status != task.Status {
@@ -606,25 +638,49 @@ func redactVideoResponseBody(body []byte) []byte {
 	if err := common.Unmarshal(body, &m); err != nil {
 		return body
 	}
-	resp, _ := m["response"].(map[string]any)
-	if resp != nil {
-		delete(resp, "bytesBase64Encoded")
-		if v, ok := resp["video"].(string); ok {
-			resp["video"] = truncateBase64(v)
-		}
-		if vs, ok := resp["videos"].([]any); ok {
-			for i := range vs {
-				if vm, ok := vs[i].(map[string]any); ok {
-					delete(vm, "bytesBase64Encoded")
-				}
-			}
-		}
-	}
+	redactVideoNode(m)
 	b, err := common.Marshal(m)
 	if err != nil {
 		return body
 	}
 	return b
+}
+
+func redactVideoNode(value any) {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "bytesbase64encoded", "bytes_base64_encoded", "video_base64", "videobase64", "base64_data", "base64data":
+				delete(node, key)
+				continue
+			case "video", "data":
+				if text, ok := child.(string); ok {
+					trimmed := strings.TrimSpace(text)
+					lowered := strings.ToLower(trimmed)
+					if strings.HasPrefix(lowered, "data:") || (len(text) > 256 && !strings.HasPrefix(lowered, "http://") && !strings.HasPrefix(lowered, "https://")) {
+						node[key] = truncateBase64(text)
+					}
+				}
+			}
+			redactVideoNode(child)
+		}
+	case []any:
+		for _, child := range node {
+			redactVideoNode(child)
+		}
+	}
+}
+
+// RedactVideoResponseBody removes large inline media fields from persisted
+// task history. Inline bytes are captured separately in private task data by
+// the polling and realtime fetch paths.
+func RedactVideoResponseBody(body []byte) []byte {
+	return redactVideoResponseBody(body)
+}
+
+func isInlineVideoChannel(channelType int) bool {
+	return channelType == constant.ChannelTypeGemini || channelType == constant.ChannelTypeVertexAi
 }
 
 func truncateBase64(s string) string {
@@ -644,17 +700,28 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
+		markTaskBillingSettled(ctx, task)
 		return
 	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
+		if RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整") {
+			markTaskBillingSettled(ctx, task)
+		}
 		return
 	}
-	// 2. 回退到 token 重算
+	// 2. If the provider exposes actual duration/count, settle the dynamic
+	// reservation even when it does not implement a custom billing adaptor.
+	if RecalculateTaskQuotaByActualVideo(ctx, task, taskResult) {
+		markTaskBillingSettled(ctx, task)
+		return
+	}
+	// 3. 回退到 token 重算
 	if taskResult.TotalTokens > 0 {
 		RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
+		markTaskBillingSettled(ctx, task)
 		return
 	}
 	// 3. 无调整，保持预扣额度
+	markTaskBillingSettled(ctx, task)
 }

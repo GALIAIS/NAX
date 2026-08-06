@@ -39,6 +39,7 @@ type QueryTaskResponse struct {
 	FileID      string   `json:"file_id,omitempty"`
 	VideoWidth  int      `json:"video_width,omitempty"`
 	VideoHeight int      `json:"video_height,omitempty"`
+	Duration    float64  `json:"duration,omitempty"`
 	BaseResp    BaseResp `json:"base_resp"`
 }
 

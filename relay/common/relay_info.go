@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -836,16 +837,30 @@ type TaskRelayInfo struct {
 }
 
 type TaskSubmitReq struct {
-	Prompt         string                 `json:"prompt"`
-	Model          string                 `json:"model,omitempty"`
-	Mode           string                 `json:"mode,omitempty"`
-	Image          string                 `json:"image,omitempty"`
-	Images         []string               `json:"images,omitempty"`
-	Size           string                 `json:"size,omitempty"`
-	Duration       int                    `json:"duration,omitempty"`
-	Seconds        string                 `json:"seconds,omitempty"`
-	InputReference string                 `json:"input_reference,omitempty"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	Prompt          string                 `json:"prompt"`
+	Model           string                 `json:"model,omitempty"`
+	Mode            string                 `json:"mode,omitempty"`
+	Image           string                 `json:"image,omitempty"`
+	Images          []string               `json:"images,omitempty"`
+	Size            string                 `json:"size,omitempty"`
+	Duration        int                    `json:"duration,omitempty"`
+	DurationSeconds float64                `json:"-"`
+	Seconds         string                 `json:"seconds,omitempty"`
+	Resolution      string                 `json:"resolution,omitempty"`
+	AspectRatio     string                 `json:"aspect_ratio,omitempty"`
+	Quality         string                 `json:"quality,omitempty"`
+	Width           int                    `json:"width,omitempty"`
+	Height          int                    `json:"height,omitempty"`
+	FPS             int                    `json:"fps,omitempty"`
+	N               int                    `json:"n,omitempty"`
+	Seed            int64                  `json:"seed,omitempty"`
+	ResponseFormat  string                 `json:"response_format,omitempty"`
+	User            string                 `json:"user,omitempty"`
+	InputReference  string                 `json:"input_reference,omitempty"`
+	ReferenceImages []string               `json:"reference_images,omitempty"`
+	FirstFrameImage string                 `json:"first_frame_image,omitempty"`
+	LastFrameImage  string                 `json:"last_frame_image,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func (t *TaskSubmitReq) GetPrompt() string {
@@ -853,7 +868,86 @@ func (t *TaskSubmitReq) GetPrompt() string {
 }
 
 func (t *TaskSubmitReq) HasImage() bool {
-	return len(t.Images) > 0
+	return len(t.Images) > 0 || strings.TrimSpace(t.Image) != "" ||
+		strings.TrimSpace(t.InputReference) != "" || len(t.ReferenceImages) > 0 ||
+		strings.TrimSpace(t.FirstFrameImage) != "" || strings.TrimSpace(t.LastFrameImage) != ""
+}
+
+// ImageList returns the ordered image/frame inputs shared by image-to-video
+// protocols. It normalizes OpenAI's singular image/input_reference fields and
+// the newer reference/first/last-frame aliases without duplicating values.
+func (t *TaskSubmitReq) ImageList() []string {
+	if t == nil {
+		return nil
+	}
+	values := make([]string, 0, len(t.Images)+5)
+	// Keep the singular legacy fields ahead of collection fields. A number of
+	// clients send both `image` and `images`; the singular image is the explicit
+	// first-frame choice and must not be silently replaced by images[0].
+	values = append(values, t.Image)
+	values = append(values, t.Images...)
+	values = append(values, t.InputReference, t.FirstFrameImage)
+	values = append(values, t.ReferenceImages...)
+	values = append(values, t.LastFrameImage)
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+// RequestedDurationSeconds returns the normalized duration used by video
+// adaptors and billing. The OpenAI protocol sends seconds as a string while
+// several providers send duration as a number; both forms are accepted.
+func (t *TaskSubmitReq) RequestedDurationSeconds() float64 {
+	if t == nil {
+		return 0
+	}
+	if t.DurationSeconds != 0 {
+		return t.DurationSeconds
+	}
+	if seconds, ok := parseTaskNumber([]byte(t.Seconds)); ok {
+		return seconds
+	}
+	if t.Duration > 0 {
+		return float64(t.Duration)
+	}
+	for _, key := range []string{"durationSeconds", "duration_seconds", "video_duration", "seconds", "duration"} {
+		if value, ok := metadataTaskNumber(t.Metadata, key); ok {
+			return value
+		}
+	}
+	return 0
+}
+
+// RequestedOutputCount returns the requested number of generated videos. The
+// value is bounded during validation before it can be used as a billing
+// multiplier.
+func (t *TaskSubmitReq) RequestedOutputCount() int {
+	if t == nil {
+		return 1
+	}
+	if t.N > 0 {
+		return t.N
+	}
+	for _, key := range []string{"sampleCount", "sample_count", "output_count", "count", "n"} {
+		if value, ok := metadataTaskNumber(t.Metadata, key); ok && value > 0 {
+			if value > MaxTaskOutputCount {
+				return MaxTaskOutputCount + 1
+			}
+			return int(value)
+		}
+	}
+	return 1
 }
 
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
@@ -861,6 +955,12 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	aux := &struct {
 		Metadata json.RawMessage `json:"metadata,omitempty"`
 		Duration json.RawMessage `json:"duration,omitempty"`
+		Seconds  json.RawMessage `json:"seconds,omitempty"`
+		N        json.RawMessage `json:"n,omitempty"`
+		FPS      json.RawMessage `json:"fps,omitempty"`
+		Seed     json.RawMessage `json:"seed,omitempty"`
+		Width    json.RawMessage `json:"width,omitempty"`
+		Height   json.RawMessage `json:"height,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(t),
@@ -871,16 +971,74 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	}
 
 	if len(aux.Duration) > 0 {
-		var durationInt int
-		if err := common.Unmarshal(aux.Duration, &durationInt); err == nil {
-			t.Duration = durationInt
-		} else {
-			var durationStr string
-			if err := common.Unmarshal(aux.Duration, &durationStr); err == nil && durationStr != "" {
-				if v, err := strconv.Atoi(durationStr); err == nil {
-					t.Duration = v
-				}
+		if duration, ok := parseTaskNumber(aux.Duration); ok {
+			t.DurationSeconds = duration
+			if duration > 0 && duration <= float64(MaxTaskDurationSeconds) {
+				t.Duration = int(math.Ceil(duration))
 			}
+		} else if strings.TrimSpace(string(aux.Duration)) != "null" {
+			t.DurationSeconds = -1
+		}
+	}
+	if len(aux.Seconds) > 0 {
+		if seconds, ok := parseTaskNumber(aux.Seconds); ok {
+			t.Seconds = strconv.FormatFloat(seconds, 'f', -1, 64)
+			t.DurationSeconds = seconds
+		} else {
+			var secondsText string
+			if err := common.Unmarshal(aux.Seconds, &secondsText); err == nil {
+				t.Seconds = secondsText
+			} else {
+				t.Seconds = strings.TrimSpace(string(aux.Seconds))
+			}
+			if strings.TrimSpace(t.Seconds) != "" && strings.TrimSpace(t.Seconds) != "null" {
+				t.DurationSeconds = -1
+			}
+		}
+	}
+	if len(aux.N) > 0 {
+		if count, ok := parseTaskNumber(aux.N); ok {
+			if count > float64(MaxTaskOutputCount) {
+				t.N = MaxTaskOutputCount + 1
+			} else if count < 0 {
+				t.N = -1
+			} else if count >= 0 {
+				t.N = int(count)
+			}
+		} else if strings.TrimSpace(string(aux.N)) != "null" {
+			t.N = MaxTaskOutputCount + 1
+		}
+	}
+	if len(aux.FPS) > 0 {
+		if fps, ok := parseTaskNumber(aux.FPS); ok {
+			if fps > float64(MaxTaskFPS) {
+				t.FPS = MaxTaskFPS + 1
+			} else if fps < 0 {
+				t.FPS = -1
+			} else if fps >= 0 {
+				t.FPS = int(fps)
+			}
+		} else if strings.TrimSpace(string(aux.FPS)) != "null" {
+			t.FPS = MaxTaskFPS + 1
+		}
+	}
+	if len(aux.Width) > 0 {
+		if width, ok := parseTaskNumber(aux.Width); ok {
+			t.Width = normalizeTaskDimension(width)
+		} else if strings.TrimSpace(string(aux.Width)) != "null" {
+			t.Width = -1
+		}
+	}
+	if len(aux.Height) > 0 {
+		if height, ok := parseTaskNumber(aux.Height); ok {
+			t.Height = normalizeTaskDimension(height)
+		} else if strings.TrimSpace(string(aux.Height)) != "null" {
+			t.Height = -1
+		}
+	}
+	if len(aux.Seed) > 0 {
+		if seed, ok := parseTaskNumber(aux.Seed); ok && seed >= float64(math.MinInt64) && seed <= float64(math.MaxInt64) {
+			t.Seed = int64(seed)
 		}
 	}
 
@@ -890,7 +1048,6 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 			var metadataObj map[string]interface{}
 			if err := common.Unmarshal([]byte(metadataStr), &metadataObj); err == nil {
 				t.Metadata = metadataObj
-				return nil
 			}
 		}
 
@@ -900,7 +1057,97 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	// Preserve provider-specific protocol fields sent at the request root.
+	// The shared request deliberately exposes only portable fields, but video
+	// APIs commonly add options such as audio_url, camera_motion, watermark,
+	// callback_url, or model-specific guidance values. Keeping those values in
+	// Metadata lets each adaptor opt in without silently dropping a valid
+	// request. Explicit metadata wins when both locations use the same key.
+	var rawFields map[string]json.RawMessage
+	if err := common.Unmarshal(data, &rawFields); err == nil {
+		if t.Metadata == nil {
+			t.Metadata = make(map[string]interface{})
+		}
+		for key, raw := range rawFields {
+			if taskSubmitKnownJSONFields[key] {
+				continue
+			}
+			if _, exists := t.Metadata[key]; exists {
+				continue
+			}
+			var value interface{}
+			if err := common.Unmarshal(raw, &value); err == nil {
+				t.Metadata[key] = value
+			}
+		}
+		if len(t.Metadata) == 0 {
+			t.Metadata = nil
+		}
+	}
+
 	return nil
+}
+
+var taskSubmitKnownJSONFields = map[string]bool{
+	"prompt": true, "model": true, "mode": true, "image": true, "images": true,
+	"size": true, "duration": true, "seconds": true, "resolution": true,
+	"aspect_ratio": true, "quality": true, "width": true, "height": true,
+	"fps": true, "n": true, "seed": true, "response_format": true,
+	"user": true, "input_reference": true, "reference_images": true,
+	"first_frame_image": true, "last_frame_image": true, "metadata": true,
+}
+
+const (
+	// MaxTaskOutputCount and MaxTaskFPS protect values that may become billing
+	// multipliers or expensive provider parameters.
+	MaxTaskOutputCount = 16
+	MaxTaskFPS         = 240
+	MaxTaskDimension   = 16384
+)
+
+func normalizeTaskDimension(value float64) int {
+	if value < 0 {
+		return -1
+	}
+	if value > float64(MaxTaskDimension) {
+		return MaxTaskDimension + 1
+	}
+	return int(value)
+}
+
+func parseTaskNumber(raw []byte) (float64, bool) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return 0, false
+	}
+	var number float64
+	if err := common.Unmarshal(raw, &number); err == nil && !math.IsNaN(number) && !math.IsInf(number, 0) {
+		return number, true
+	}
+	var text string
+	if err := common.Unmarshal(raw, &text); err != nil {
+		return 0, false
+	}
+	number, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+		return 0, false
+	}
+	return number, true
+}
+
+func metadataTaskNumber(metadata map[string]interface{}, key string) (float64, bool) {
+	if metadata == nil {
+		return 0, false
+	}
+	value, exists := metadata[key]
+	if !exists {
+		return 0, false
+	}
+	raw, err := common.Marshal(value)
+	if err != nil {
+		return 0, false
+	}
+	return parseTaskNumber(raw)
 }
 func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 	metadata := t.Metadata
@@ -918,15 +1165,21 @@ func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 }
 
 type TaskInfo struct {
-	Code             int    `json:"code"`
-	TaskID           string `json:"task_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	Url              string `json:"url,omitempty"`
-	RemoteUrl        string `json:"remote_url,omitempty"`
-	Progress         string `json:"progress,omitempty"`
-	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	Code              int     `json:"code"`
+	TaskID            string  `json:"task_id"`
+	Status            string  `json:"status"`
+	Reason            string  `json:"reason,omitempty"`
+	Url               string  `json:"url,omitempty"`
+	RemoteUrl         string  `json:"remote_url,omitempty"`
+	Progress          string  `json:"progress,omitempty"`
+	DurationSeconds   float64 `json:"duration_seconds,omitempty"`
+	OutputCount       int     `json:"output_count,omitempty"`
+	Resolution        string  `json:"resolution,omitempty"`
+	QueueSeconds      float64 `json:"queue_seconds,omitempty"`
+	ProcessingSeconds float64 `json:"processing_seconds,omitempty"`
+	TotalSeconds      float64 `json:"total_seconds,omitempty"`
+	CompletionTokens  int     `json:"completion_tokens,omitempty"` // 用于按倍率计费
+	TotalTokens       int     `json:"total_tokens,omitempty"`      // 用于按倍率计费
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

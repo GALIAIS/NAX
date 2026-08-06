@@ -8,52 +8,29 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
-const maxVeoImageSize = 20 * 1024 * 1024 // 20 MB
+const maxVeoImageSize = 20 * 1024 * 1024
 
-// ExtractMultipartImage reads the first `input_reference` file from a multipart
-// form upload and returns a VeoImageInput. Returns nil if no file is present.
+// ExtractMultipartImage reads the first uploaded image/frame field from a
+// multipart request and returns a VeoImageInput. Returns nil if no file is
+// present or the bounded conversion fails.
 func ExtractMultipartImage(c *gin.Context, info *relaycommon.RelayInfo) *VeoImageInput {
-	mf, err := c.MultipartForm()
-	if err != nil {
+	values, err := relaycommon.MultipartImageData(c, "input_reference", "image", "images", "first_frame_image", "last_frame_image", "reference_images")
+	if err != nil || len(values) == 0 {
 		return nil
 	}
-	files, exists := mf.File["input_reference"]
-	if !exists || len(files) == 0 {
-		return nil
+	if info != nil {
+		info.Action = constant.TaskActionGenerate
 	}
-	fh := files[0]
-	if fh.Size > maxVeoImageSize {
-		return nil
-	}
-	file, err := fh.Open()
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-
-	fileBytes, err := io.ReadAll(file)
-	if err != nil {
-		return nil
-	}
-
-	mimeType := fh.Header.Get("Content-Type")
-	if mimeType == "" || mimeType == "application/octet-stream" {
-		mimeType = http.DetectContentType(fileBytes)
-	}
-
-	info.Action = constant.TaskActionGenerate
-	return &VeoImageInput{
-		BytesBase64Encoded: base64.StdEncoding.EncodeToString(fileBytes),
-		MimeType:           mimeType,
-	}
+	return ParseImageInput(values[0])
 }
 
 // ParseImageInput parses an image string (data URI or raw base64) into a
-// VeoImageInput. Returns nil if the input is empty or invalid.
-// TODO: support downloading HTTP URL images and converting to base64
+// VeoImageInput. HTTP(S) inputs are fetched through the gateway's SSRF-safe
+// client because Veo accepts image bytes rather than arbitrary remote URLs.
 func ParseImageInput(imageStr string) *VeoImageInput {
 	imageStr = strings.TrimSpace(imageStr)
 	if imageStr == "" {
@@ -62,6 +39,34 @@ func ParseImageInput(imageStr string) *VeoImageInput {
 
 	if strings.HasPrefix(imageStr, "data:") {
 		return parseDataURI(imageStr)
+	}
+	if strings.HasPrefix(strings.ToLower(imageStr), "http://") || strings.HasPrefix(strings.ToLower(imageStr), "https://") {
+		if err := service.ValidateSSRFProtectedFetchURL(imageStr); err != nil {
+			return nil
+		}
+		resp, err := service.GetSSRFProtectedHTTPClient().Get(imageStr)
+		if err != nil {
+			return nil
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return nil
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxVeoImageSize+1))
+		if err != nil || len(data) == 0 || len(data) > maxVeoImageSize {
+			return nil
+		}
+		mimeType := resp.Header.Get("Content-Type")
+		if index := strings.IndexByte(mimeType, ';'); index >= 0 {
+			mimeType = strings.TrimSpace(mimeType[:index])
+		}
+		if mimeType == "" {
+			mimeType = http.DetectContentType(data)
+		}
+		return &VeoImageInput{
+			BytesBase64Encoded: base64.StdEncoding.EncodeToString(data),
+			MimeType:           mimeType,
+		}
 	}
 
 	raw, err := base64.StdEncoding.DecodeString(imageStr)

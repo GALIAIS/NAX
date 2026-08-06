@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
@@ -82,38 +84,62 @@ func VideoProxy(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "", nil)
+	method := c.Request.Method
+	if method != http.MethodGet && method != http.MethodHead {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "", nil)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to create request: %s", err.Error()))
 		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to create proxy request")
 		return
 	}
+	for _, header := range []string{"Range", "If-Range", "Accept", "If-None-Match", "If-Modified-Since"} {
+		if value := c.GetHeader(header); value != "" {
+			req.Header.Set(header, value)
+		}
+	}
 
 	switch channel.Type {
 	case constant.ChannelTypeGemini:
 		apiKey := task.PrivateData.Key
-		if apiKey == "" {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Missing stored API key for Gemini task %s", taskID))
-			videoProxyError(c, http.StatusInternalServerError, "server_error", "API key not stored for task")
-			return
+		if inlineResult := strings.TrimSpace(task.PrivateData.InlineResult); strings.HasPrefix(strings.ToLower(inlineResult), "data:") {
+			videoURL = inlineResult
+		} else {
+			if apiKey == "" {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Missing stored API key for Gemini task %s", taskID))
+				videoProxyError(c, http.StatusInternalServerError, "server_error", "API key not stored for task")
+				return
+			}
+			videoURL, err = getGeminiVideoURL(channel, task, apiKey)
+			if err != nil {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to resolve Gemini video URL for task %s: %s", taskID, err.Error()))
+				videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to resolve Gemini video URL")
+				return
+			}
+			req.Header.Set("x-goog-api-key", apiKey)
 		}
-		videoURL, err = getGeminiVideoURL(channel, task, apiKey)
-		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to resolve Gemini video URL for task %s: %s", taskID, err.Error()))
-			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to resolve Gemini video URL")
-			return
-		}
-		req.Header.Set("x-goog-api-key", apiKey)
 	case constant.ChannelTypeVertexAi:
-		videoURL, err = getVertexVideoURL(channel, task)
-		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to resolve Vertex video URL for task %s: %s", taskID, err.Error()))
-			videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to resolve Vertex video URL")
-			return
+		if inlineResult := strings.TrimSpace(task.PrivateData.InlineResult); strings.HasPrefix(strings.ToLower(inlineResult), "data:") {
+			videoURL = inlineResult
+		} else {
+			videoURL, err = getVertexVideoURL(channel, task)
+			if err != nil {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to resolve Vertex video URL for task %s: %s", taskID, err.Error()))
+				videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to resolve Vertex video URL")
+				return
+			}
 		}
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
 		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
 		req.Header.Set("Authorization", "Bearer "+channel.Key)
+	case constant.ChannelTypeAdvancedCustom:
+		// Advanced custom video adaptors may return a provider media URL rather
+		// than a New API proxy URL. Apply the configured route authentication
+		// when the provider requires a header/query key; signed media URLs can
+		// remain unauthenticated.
+		videoURL = task.GetResultURL()
+		videoURL = applyAdvancedCustomVideoAuth(channel, task, req, videoURL)
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()
@@ -123,6 +149,14 @@ func VideoProxy(c *gin.Context) {
 	if videoURL == "" {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Video URL is empty for task %s", taskID))
 		videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to fetch video content")
+		return
+	}
+	videoURL = resolveVideoURL(baseURL, videoURL)
+	if isTaskProxyContentURL(videoURL, taskID) {
+		// A provider without a resolvable media URL must not be fetched through
+		// this endpoint again: doing so would recurse into /content until the
+		// request times out. Gemini/Vertex resolve their URL before this guard.
+		videoProxyError(c, http.StatusBadGateway, "server_error", "Provider did not return a downloadable video URL")
 		return
 	}
 
@@ -162,7 +196,7 @@ func VideoProxy(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusNotModified {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Upstream returned status %d for %s", resp.StatusCode, videoURL))
 		videoProxyError(c, http.StatusBadGateway, "server_error",
 			fmt.Sprintf("Upstream service returned status %d", resp.StatusCode))
@@ -177,9 +211,71 @@ func VideoProxy(c *gin.Context) {
 
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(resp.StatusCode)
+	if method == http.MethodHead || resp.StatusCode == http.StatusNotModified {
+		return
+	}
 	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
 	}
+}
+
+func resolveVideoURL(baseURL, videoURL string) string {
+	videoURL = strings.TrimSpace(videoURL)
+	if videoURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(videoURL)
+	if err != nil || parsed.IsAbs() || baseURL == "" {
+		return videoURL
+	}
+	base, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || !base.IsAbs() {
+		return videoURL
+	}
+	return base.ResolveReference(parsed).String()
+}
+
+func applyAdvancedCustomVideoAuth(channelModel *model.Channel, task *model.Task, req *http.Request, videoURL string) string {
+	if channelModel == nil || task == nil || req == nil {
+		return videoURL
+	}
+	config := channelModel.GetOtherSettings().AdvancedCustom
+	if config == nil {
+		req.Header.Set("Authorization", "Bearer "+channelModel.Key)
+		return videoURL
+	}
+	modelName := task.Properties.OriginModelName
+	var route dto.AdvancedCustomRoute
+	var found bool
+	for _, path := range []string{"/v1/videos", "/v1/videos/generations", "/v1/video/generations"} {
+		if route, found = config.MatchPathForModel(path, modelName); found {
+			break
+		}
+	}
+	if !found {
+		req.Header.Set("Authorization", "Bearer "+channelModel.Key)
+		return videoURL
+	}
+	auth := route.Auth
+	if auth == nil {
+		req.Header.Set("Authorization", "Bearer "+channelModel.Key)
+		return videoURL
+	}
+	value := strings.ReplaceAll(auth.Value, "{api_key}", channelModel.Key)
+	value = strings.ReplaceAll(value, "{key}", channelModel.Key)
+	switch strings.TrimSpace(auth.Type) {
+	case dto.AdvancedCustomAuthTypeHeader:
+		req.Header.Set(strings.TrimSpace(auth.Name), value)
+	case dto.AdvancedCustomAuthTypeQuery:
+		parsed, err := url.Parse(videoURL)
+		if err == nil {
+			query := parsed.Query()
+			query.Set(strings.TrimSpace(auth.Name), value)
+			parsed.RawQuery = query.Encode()
+			videoURL = parsed.String()
+		}
+	}
+	return videoURL
 }
 
 func writeVideoDataURL(c *gin.Context, dataURL string) error {
@@ -208,9 +304,81 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 		}
 	}
 
+	return writeVideoBytes(c, videoBytes, mimeType)
+}
+
+func writeVideoBytes(c *gin.Context, videoBytes []byte, mimeType string) error {
+	if c == nil {
+		return fmt.Errorf("context is nil")
+	}
+	if mimeType == "" {
+		mimeType = "video/mp4"
+	}
 	c.Writer.Header().Set("Content-Type", mimeType)
+	c.Writer.Header().Set("Accept-Ranges", "bytes")
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
-	c.Writer.WriteHeader(http.StatusOK)
-	_, err = c.Writer.Write(videoBytes)
+
+	start, end := 0, len(videoBytes)-1
+	status := http.StatusOK
+	if rangeHeader := strings.TrimSpace(c.GetHeader("Range")); rangeHeader != "" {
+		var err error
+		start, end, err = parseSingleVideoRange(rangeHeader, len(videoBytes))
+		if err != nil {
+			c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(videoBytes)))
+			c.Writer.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return nil
+		}
+		status = http.StatusPartialContent
+		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(videoBytes)))
+	}
+	contentLength := end - start + 1
+	if contentLength < 0 {
+		contentLength = 0
+	}
+	c.Writer.Header().Set("Content-Length", strconv.Itoa(contentLength))
+	c.Writer.WriteHeader(status)
+	if c.Request.Method == http.MethodHead || contentLength == 0 {
+		return nil
+	}
+	_, err := c.Writer.Write(videoBytes[start : end+1])
 	return err
+}
+
+func parseSingleVideoRange(value string, size int) (int, int, error) {
+	if size <= 0 || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "bytes=") {
+		return 0, 0, fmt.Errorf("invalid range")
+	}
+	spec := strings.TrimSpace(strings.TrimSpace(value)[len("bytes="):])
+	if strings.Contains(spec, ",") {
+		return 0, 0, fmt.Errorf("multiple ranges are not supported")
+	}
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid range")
+	}
+	if strings.TrimSpace(parts[0]) == "" {
+		suffix, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil || suffix <= 0 {
+			return 0, 0, fmt.Errorf("invalid suffix range")
+		}
+		if suffix > size {
+			suffix = size
+		}
+		return size - suffix, size - 1, nil
+	}
+	start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, fmt.Errorf("invalid range start")
+	}
+	end := size - 1
+	if strings.TrimSpace(parts[1]) != "" {
+		end, err = strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil || end < start {
+			return 0, 0, fmt.Errorf("invalid range end")
+		}
+		if end >= size {
+			end = size - 1
+		}
+	}
+	return start, end, nil
 }

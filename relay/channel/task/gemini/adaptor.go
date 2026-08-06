@@ -42,7 +42,14 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
+	if taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate); taskErr != nil {
+		return taskErr
+	}
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+	return ValidateVeoRequest(req)
 }
 
 // BuildRequestURL constructs the Gemini API predictLongRunning endpoint for Veo.
@@ -78,12 +85,26 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 
 	instance := VeoInstance{Prompt: req.Prompt}
-	if img := ExtractMultipartImage(c, info); img != nil {
-		instance.Image = img
-	} else if len(req.Images) > 0 {
-		if parsed := ParseImageInput(req.Images[0]); parsed != nil {
+	images, imageErr := relaycommon.MultipartImageData(c, "input_reference", "image", "images", "first_frame_image", "last_frame_image", "reference_images")
+	if imageErr != nil {
+		return nil, imageErr
+	}
+	images = append(images, req.ImageList()...)
+	if len(images) > 0 {
+		if parsed := ParseImageInput(images[0]); parsed != nil {
 			instance.Image = parsed
 			info.Action = constant.TaskActionGenerate
+		}
+		if len(images) > 1 {
+			instance.LastFrame = ParseImageInput(images[1])
+		}
+		for _, image := range images[2:] {
+			if parsed := ParseImageInput(image); parsed != nil {
+				instance.ReferenceImages = append(instance.ReferenceImages, VeoReferenceImage{
+					Image:         parsed,
+					ReferenceType: "asset",
+				})
+			}
 		}
 	}
 
@@ -91,8 +112,8 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, params); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
-	if params.DurationSeconds == 0 && req.Duration > 0 {
-		params.DurationSeconds = req.Duration
+	if params.DurationSeconds == 0 {
+		params.DurationSeconds = ResolveVeoDuration(req.Metadata, req.Duration, req.Seconds)
 	}
 	if params.Resolution == "" && req.Size != "" {
 		params.Resolution = SizeToVeoResolution(req.Size)
@@ -101,7 +122,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		params.AspectRatio = SizeToVeoAspectRatio(req.Size)
 	}
 	params.Resolution = strings.ToLower(params.Resolution)
-	params.SampleCount = 1
+	params.SampleCount = req.RequestedOutputCount()
+	if params.SampleCount <= 0 {
+		params.SampleCount = 1
+	}
 
 	body := VeoRequestPayload{
 		Instances:  []VeoInstance{instance},
@@ -176,6 +200,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	return map[string]float64{
 		"seconds":    float64(seconds),
 		"resolution": resRatio,
+		"count":      float64(req.RequestedOutputCount()),
 	}
 }
 
@@ -236,9 +261,12 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	ti.TaskID = taskcommon.EncodeLocalTaskID(op.Name)
 
 	if len(op.Response.GenerateVideoResponse.GeneratedVideos) > 0 {
+		ti.OutputCount = len(op.Response.GenerateVideoResponse.GeneratedVideos)
 		if uri := op.Response.GenerateVideoResponse.GeneratedVideos[0].Video.URI; uri != "" {
 			ti.RemoteUrl = uri
 		}
+	} else {
+		ti.OutputCount = 1
 	}
 
 	return ti, nil

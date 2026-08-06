@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -18,6 +20,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	videodto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
@@ -28,6 +31,47 @@ type TaskSubmitResult struct {
 	Platform       constant.TaskPlatform
 	Quota          int
 	//PerCallPrice   types.PriceData
+}
+
+// CancelUpstreamVideoTask invokes an adaptor-specific cancellation endpoint
+// when available. Callers should treat errors as best-effort diagnostics and
+// still perform the local atomic state transition/refund.
+func CancelUpstreamVideoTask(task *model.Task) error {
+	if task == nil {
+		return errors.New("task is nil")
+	}
+	channelModel, err := model.CacheGetChannel(task.ChannelId)
+	if err != nil {
+		return err
+	}
+	adaptor := GetTaskAdaptor(task.Platform)
+	canceller, ok := adaptor.(channel.TaskCanceller)
+	if !ok {
+		return nil
+	}
+	baseURL := constant.ChannelBaseURLs[channelModel.Type]
+	if channelModel.GetBaseURL() != "" {
+		baseURL = channelModel.GetBaseURL()
+	}
+	key := channelModel.Key
+	if task.PrivateData.Key != "" {
+		key = task.PrivateData.Key
+	}
+	if adaptor != nil {
+		info := &relaycommon.RelayInfo{
+			ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelType:          channelModel.Type,
+				ChannelBaseUrl:       baseURL,
+				ApiKey:               key,
+				ChannelSetting:       channelModel.GetSetting(),
+				ChannelOtherSettings: channelModel.GetOtherSettings(),
+			},
+			OriginModelName: task.Properties.OriginModelName,
+		}
+		info.UpstreamModelName = task.Properties.UpstreamModelName
+		adaptor.Init(info)
+	}
+	return canceller.CancelTask(baseURL, key, task.GetUpstreamTaskID(), channelModel.GetSetting().Proxy)
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
@@ -188,7 +232,21 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
 	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
 	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
-	if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
+	estimatedRatios := adaptor.EstimateBilling(c, info)
+	if req, requestErr := relaycommon.GetTaskRequest(c); requestErr == nil {
+		// Every video protocol accepts the common duration/count fields. Add
+		// them as a fallback for adaptors that only implement provider-specific
+		// pricing, while preserving any provider-published override.
+		for key, value := range relaycommon.TaskRequestBillingRatios(req) {
+			if _, exists := estimatedRatios[key]; !exists {
+				if estimatedRatios == nil {
+					estimatedRatios = make(map[string]float64)
+				}
+				estimatedRatios[key] = value
+			}
+		}
+	}
+	if len(estimatedRatios) > 0 {
 		for k, v := range estimatedRatios {
 			info.PriceData.AddOtherRatio(k, v)
 		}
@@ -221,8 +279,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
-	if resp != nil && resp.StatusCode != http.StatusOK {
+	if resp != nil && (resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices) {
 		responseBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 	}
 
@@ -235,7 +294,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	c.Header("X-New-Api-Other-Ratios", string(ratiosJSON))
 
 	// 11. 解析响应
+	originalWriter := c.Writer
+	capture := &taskResponseCapture{ResponseWriter: originalWriter}
+	c.Writer = capture
 	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
+	c.Writer = originalWriter
 	if taskErr != nil {
 		return nil, taskErr
 	}
@@ -250,6 +313,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			info.PriceData.Quota = finalQuota
 		}
 	}
+	// Commit only after submit-time billing has settled. The normalized public
+	// response can then expose the same duration/count ratios that are stored in
+	// the task's BillingContext, instead of returning the pre-adjustment estimate.
+	if capture.Written() {
+		commitTaskResponse(capture, info, c)
+	}
 
 	return &TaskSubmitResult{
 		UpstreamTaskID: upstreamTaskID,
@@ -257,6 +326,118 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+// taskResponseCapture delays adaptor JSON output until submit-time billing
+// adjustments have completed. This lets every video protocol receive the same
+// public task ID, normalized status, duration, and billing-ratio metadata even
+// when an older adaptor writes directly with c.JSON.
+type taskResponseCapture struct {
+	gin.ResponseWriter
+	status int
+	body   bytes.Buffer
+}
+
+func (w *taskResponseCapture) WriteHeader(code int) {
+	if code > 0 && w.status == 0 {
+		w.status = code
+	}
+}
+
+func (w *taskResponseCapture) WriteHeaderNow() {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+}
+
+func (w *taskResponseCapture) Write(data []byte) (int, error) {
+	w.WriteHeaderNow()
+	return w.body.Write(data)
+}
+
+func (w *taskResponseCapture) WriteString(data string) (int, error) {
+	w.WriteHeaderNow()
+	return w.body.WriteString(data)
+}
+
+func (w *taskResponseCapture) Status() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
+func (w *taskResponseCapture) Size() int {
+	return w.body.Len()
+}
+
+func (w *taskResponseCapture) Written() bool {
+	return w.status > 0 || w.body.Len() > 0
+}
+
+func commitTaskResponse(capture *taskResponseCapture, info *relaycommon.RelayInfo, c *gin.Context) {
+	if capture == nil || capture.body.Len() == 0 || info == nil {
+		return
+	}
+	body := normalizeTaskSubmitResponse(capture.body.Bytes(), info, c)
+	capture.ResponseWriter.WriteHeader(capture.Status())
+	_, _ = capture.ResponseWriter.Write(body)
+}
+
+func normalizeTaskSubmitResponse(body []byte, info *relaycommon.RelayInfo, c *gin.Context) []byte {
+	var response map[string]any
+	if err := common.Unmarshal(body, &response); err != nil || response == nil {
+		return body
+	}
+	if info.PublicTaskID != "" {
+		response["id"] = info.PublicTaskID
+		response["task_id"] = info.PublicTaskID
+	}
+	if info.OriginModelName != "" {
+		if modelName, ok := response["model"].(string); !ok || strings.TrimSpace(modelName) == "" {
+			response["model"] = info.OriginModelName
+		}
+	}
+	if _, ok := response["object"].(string); !ok {
+		response["object"] = "video"
+	}
+	if _, ok := response["status"].(string); !ok {
+		response["status"] = videodto.VideoStatusQueued
+	}
+	if _, ok := response["created_at"].(float64); !ok {
+		response["created_at"] = time.Now().Unix()
+	}
+	if req, err := relaycommon.GetTaskRequest(c); err == nil {
+		if seconds := req.RequestedDurationSeconds(); seconds > 0 && response["seconds"] == nil {
+			response["seconds"] = strconv.FormatFloat(seconds, 'f', -1, 64)
+		}
+		metadata, _ := response["metadata"].(map[string]any)
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		if ratios := relaycommon.TaskRequestBillingRatios(req); len(ratios) > 0 {
+			metadata["billing_ratios"] = ratios
+		}
+		response["metadata"] = metadata
+	}
+	if ratios := info.PriceData.OtherRatios(); len(ratios) > 0 {
+		metadata, _ := response["metadata"].(map[string]any)
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		metadata["billing_ratios"] = ratios
+		if response["seconds"] == nil {
+			if seconds, ok := ratios["seconds"]; ok && seconds > 0 {
+				response["seconds"] = strconv.FormatFloat(seconds, 'f', -1, 64)
+			}
+		}
+		response["metadata"] = metadata
+	}
+	encoded, err := common.Marshal(response)
+	if err != nil {
+		return body
+	}
+	return encoded
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
@@ -296,7 +477,7 @@ var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp 
 func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {
 	respBuilder, ok := fetchRespBuilders[relayMode]
 	if !ok {
-		taskResp = service.TaskErrorWrapperLocal(errors.New("invalid_relay_mode"), "invalid_relay_mode", http.StatusBadRequest)
+		return service.TaskErrorWrapperLocal(errors.New("invalid_relay_mode"), "invalid_relay_mode", http.StatusBadRequest)
 	}
 
 	respBody, taskErr := respBuilder(c)
@@ -406,7 +587,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
 				return
 			}
-			respBody = openAIVideoData
+			respBody = normalizeOpenAIVideoResponse(openAIVideoData, originTask)
 			return
 		}
 		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
@@ -474,13 +655,21 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		task.Progress = ti.Progress
 	}
 	if strings.HasPrefix(ti.Url, "data:") {
-		// data: URI — kept in Data, not ResultURL
+		// data: URI — keep it private and stream it through /content rather than
+		// exposing a multi-megabyte payload in the public task response.
+		task.PrivateData.InlineResult = ti.Url
 	} else if ti.Url != "" {
+		task.PrivateData.InlineResult = ""
 		task.PrivateData.ResultURL = ti.Url
 	} else if task.Status == model.TaskStatusSuccess {
 		// No URL from adaptor — construct proxy URL using public task ID
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 	}
+	if inlineResult := service.ExtractInlineVideoDataURL(body); inlineResult != "" {
+		task.PrivateData.InlineResult = inlineResult
+	}
+	task.Data = service.RedactVideoResponseBody(body)
+	service.UpdateTaskTiming(task, ti, time.Now().Unix())
 
 	if !snap.Equal(task.Snapshot()) {
 		_, _ = task.UpdateWithStatus(snap.Status)
@@ -540,7 +729,7 @@ func mapTaskStatusToSimple(status model.TaskStatus) string {
 		return "succeeded"
 	case model.TaskStatusFailure:
 		return "failed"
-	case model.TaskStatusQueued, model.TaskStatusSubmitted:
+	case model.TaskStatusNotStart, model.TaskStatusQueued, model.TaskStatusSubmitted:
 		return "queued"
 	default:
 		return "processing"
@@ -558,6 +747,7 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Group:      task.Group,
 		ChannelId:  task.ChannelId,
 		Quota:      task.Quota,
+		Billing:    taskBillingSummary(task),
 		Action:     task.Action,
 		Status:     string(task.Status),
 		FailReason: task.FailReason,
@@ -566,8 +756,116 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		StartTime:  task.StartTime,
 		FinishTime: task.FinishTime,
 		Progress:   task.Progress,
+		Timing:     task.PrivateData.Timing,
 		Properties: task.Properties,
 		Username:   task.Username,
 		Data:       task.Data,
 	}
+}
+
+func taskBillingSummary(task *model.Task) *dto.TaskBillingSummary {
+	if task == nil || task.PrivateData.BillingContext == nil {
+		return nil
+	}
+	bc := task.PrivateData.BillingContext
+	otherRatios := make(map[string]float64, len(bc.OtherRatios))
+	for key, value := range bc.OtherRatios {
+		if value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) {
+			otherRatios[key] = value
+		}
+	}
+	mode := "dynamic"
+	if bc.PerCallBilling {
+		mode = "per_call"
+	}
+	preConsumed := bc.PreConsumedQuota
+	if preConsumed <= 0 {
+		preConsumed = task.Quota
+	}
+	return &dto.TaskBillingSummary{
+		Mode:             mode,
+		PreConsumedQuota: preConsumed,
+		ActualQuota:      task.Quota,
+		ModelPrice:       bc.ModelPrice,
+		ModelRatio:       bc.ModelRatio,
+		GroupRatio:       bc.GroupRatio,
+		OtherRatios:      otherRatios,
+		Settled:          bc.Settled || (bc.PreConsumedQuota == 0 && (task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure)),
+	}
+}
+
+// normalizeOpenAIVideoResponse makes every video adaptor expose the same
+// lifecycle and billing metadata. Provider converters can continue returning
+// their native fields, but public IDs/status/timestamps must reflect the
+// gateway task because those are the values clients use for polling.
+func normalizeOpenAIVideoResponse(body []byte, task *model.Task) []byte {
+	if task == nil {
+		return body
+	}
+	var response map[string]any
+	if err := common.Unmarshal(body, &response); err != nil || response == nil {
+		return body
+	}
+	response["id"] = task.TaskID
+	response["task_id"] = task.TaskID
+	response["status"] = task.Status.ToVideoStatus()
+	if task.Properties.OriginModelName != "" {
+		if modelName, ok := response["model"].(string); !ok || strings.TrimSpace(modelName) == "" {
+			response["model"] = task.Properties.OriginModelName
+		}
+	}
+	if task.Progress != "" {
+		progress := strings.TrimSuffix(task.Progress, "%")
+		if value, err := strconv.Atoi(progress); err == nil && value >= 0 {
+			response["progress"] = value
+		}
+	}
+	if createdAt, ok := response["created_at"].(float64); !ok || createdAt <= 0 {
+		if task.CreatedAt > 0 {
+			response["created_at"] = task.CreatedAt
+		}
+	}
+	terminal := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
+	if terminal {
+		completedAt := task.FinishTime
+		if completedAt == 0 {
+			completedAt = task.UpdatedAt
+		}
+		if completedAt > 0 {
+			response["completed_at"] = completedAt
+		}
+	} else {
+		delete(response, "completed_at")
+	}
+	if task.Status == model.TaskStatusFailure && response["error"] == nil {
+		response["error"] = map[string]any{"message": task.FailReason, "code": "upstream_error"}
+	}
+	metadata, _ := response["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	if resultURL := task.GetResultURL(); resultURL != "" {
+		if _, exists := metadata["url"]; !exists {
+			metadata["url"] = resultURL
+		}
+	}
+	if timing := task.PrivateData.Timing; timing != nil {
+		metadata["timing"] = timing
+		seconds := timing.ActualDurationSeconds
+		if seconds <= 0 {
+			seconds = timing.RequestedDurationSeconds
+		}
+		if seconds > 0 {
+			response["seconds"] = strconv.FormatFloat(seconds, 'f', -1, 64)
+		}
+	}
+	if billing := taskBillingSummary(task); billing != nil {
+		metadata["billing"] = billing
+	}
+	response["metadata"] = metadata
+	encoded, err := common.Marshal(response)
+	if err != nil {
+		return body
+	}
+	return encoded
 }

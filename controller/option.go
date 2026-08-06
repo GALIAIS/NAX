@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/setting/theme_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -131,15 +132,25 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
-	switch option.Value.(type) {
+	switch value := option.Value.(type) {
 	case bool:
-		option.Value = common.Interface2String(option.Value.(bool))
+		option.Value = common.Interface2String(value)
 	case float64:
-		option.Value = common.Interface2String(option.Value.(float64))
+		option.Value = common.Interface2String(value)
 	case int:
-		option.Value = common.Interface2String(option.Value.(int))
+		option.Value = common.Interface2String(value)
+	case map[string]any, []any:
+		encoded, marshalErr := common.Marshal(value)
+		if marshalErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "无效的参数",
+			})
+			return
+		}
+		option.Value = string(encoded)
 	default:
-		option.Value = fmt.Sprintf("%v", option.Value)
+		option.Value = fmt.Sprintf("%v", value)
 	}
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":
@@ -224,6 +235,14 @@ func UpdateOption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "Classic 前端已移除，主题只能设置为 default",
+			})
+			return
+		}
+	case theme_setting.OptionKey:
+		if err = theme_setting.Validate(option.Value.(string)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
 			})
 			return
 		}

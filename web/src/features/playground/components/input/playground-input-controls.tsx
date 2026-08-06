@@ -16,15 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { SendIcon, SquareIcon } from 'lucide-react'
+import { ImageIcon, SendIcon, SquareIcon, VideoIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { PromptInputButton } from '@/components/ai-elements/prompt-input'
 import { ModelGroupSelector } from '@/components/model-group-selector'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 import { getInputControlState } from '../../lib'
-import type { GroupOption, ModelOption } from '../../types'
+import type { GroupOption, ModelOption, PlaygroundMode } from '../../types'
 
 type PlaygroundInputControlsProps = {
   disabled?: boolean
@@ -37,6 +44,8 @@ type PlaygroundInputControlsProps = {
   onGroupChange: (value: string) => void
   onModelChange: (value: string) => void
   onStop?: () => void
+  mode: PlaygroundMode
+  onModeChange: (mode: PlaygroundMode) => void
   text: string
   tools: ReactNode
 }
@@ -52,6 +61,8 @@ export function PlaygroundInputControls({
   onGroupChange,
   onModelChange,
   onStop,
+  mode,
+  onModeChange,
   text,
   tools,
 }: PlaygroundInputControlsProps) {
@@ -67,16 +78,54 @@ export function PlaygroundInputControls({
       text,
     })
 
+  let modeLabel = t('Chat')
+  let modeIcon: ReactNode = null
+  if (mode === 'image') {
+    modeLabel = t('Image generation')
+    modeIcon = <ImageIcon size={14} />
+  } else if (mode === 'video') {
+    modeLabel = t('Video generation')
+    modeIcon = <VideoIcon size={14} />
+  }
+
   const renderSelector = () => (
-    <ModelGroupSelector
-      selectedModel={modelValue}
-      models={models}
-      onModelChange={onModelChange}
-      selectedGroup={groupValue}
-      groups={groups}
-      onGroupChange={onGroupChange}
-      disabled={isSelectorDisabled}
-    />
+    <div className='flex min-w-0 items-center gap-2'>
+      <Select
+        value={mode}
+        onValueChange={(value) => {
+          if (value === 'chat' || value === 'image' || value === 'video') {
+            onModeChange(value)
+          }
+        }}
+        disabled={isSelectorDisabled}
+      >
+        <SelectTrigger
+          className='h-8 w-[7.25rem] shrink-0 text-xs'
+          aria-label={t('Playground mode')}
+        >
+          <SelectValue>
+            <span className='inline-flex items-center gap-1.5'>
+              {modeIcon}
+              {modeLabel}
+            </span>
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false}>
+          <SelectItem value='chat'>{t('Chat')}</SelectItem>
+          <SelectItem value='image'>{t('Image generation')}</SelectItem>
+          <SelectItem value='video'>{t('Video generation')}</SelectItem>
+        </SelectContent>
+      </Select>
+      <ModelGroupSelector
+        selectedModel={modelValue}
+        models={models}
+        onModelChange={onModelChange}
+        selectedGroup={groupValue}
+        groups={groups}
+        onGroupChange={onGroupChange}
+        disabled={isSelectorDisabled}
+      />
+    </div>
   )
 
   const renderSubmitButton = () =>

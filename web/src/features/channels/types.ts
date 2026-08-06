@@ -112,18 +112,23 @@ export interface ChannelOtherSettings {
 }
 
 export interface AdvancedCustomConfig {
+  [key: string]: unknown
   advanced_routes?: AdvancedCustomRoute[]
 }
 
 export interface AdvancedCustomRoute {
+  [key: string]: unknown
   incoming_path?: string
   upstream_path?: string
+  fetch_path?: string
+  cancel_path?: string
   converter?: AdvancedCustomConverter
   models?: string[]
   auth?: AdvancedCustomRouteAuth
 }
 
 export interface AdvancedCustomRouteAuth {
+  [key: string]: unknown
   type?: AdvancedCustomAuthType
   name?: string
   value?: string

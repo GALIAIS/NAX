@@ -100,8 +100,10 @@ function getMessageSize(message: Message): number {
     0
   )
   const reasoningSize = message.reasoning?.content.length ?? 0
+  const mediaSize =
+    message.media?.reduce((total, media) => total + media.url.length, 0) ?? 0
 
-  return versionsSize + reasoningSize
+  return versionsSize + reasoningSize + mediaSize
 }
 
 function truncateText(text: string, maxLength: number): string {
@@ -223,7 +225,23 @@ function normalizeStoredMessageForLoad(message: Message): Message {
     changed = true
   }
 
-  const normalized = changed ? { ...message, versions, reasoning } : message
+  // Blob URLs are scoped to the current browser document and cannot be
+  // restored after a reload. They are useful while the generated media is
+  // being viewed, but persisting them would leave broken media cards in the
+  // next session. Remote URLs and data URLs remain durable.
+  const media = message.media?.filter((item) => !item.url.startsWith('blob:'))
+  if (media && media.length !== message.media?.length) {
+    changed = true
+  }
+
+  const normalized = changed
+    ? {
+        ...message,
+        versions,
+        reasoning,
+        media: media?.length ? media : undefined,
+      }
+    : message
 
   if (!isAssistantMessagePending(normalized)) {
     return normalized

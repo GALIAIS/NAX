@@ -44,6 +44,7 @@ import {
   getSearchActionNotice,
 } from '../../lib'
 import type { ParameterEnabled, PlaygroundConfig } from '../../types'
+import { PlaygroundMediaPanel } from './playground-media-panel'
 import { PlaygroundParameterPanel } from './playground-parameter-panel'
 
 type PlaygroundInputToolsProps = {
@@ -73,6 +74,7 @@ export function PlaygroundInputTools({
 }: PlaygroundInputToolsProps) {
   const { t } = useTranslation()
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
+  const isChatMode = config.mode === 'chat'
 
   const handleFileAction = (action: string) => {
     const notice = getAttachmentActionNotice(action)
@@ -104,7 +106,7 @@ export function PlaygroundInputTools({
                     <PromptInputButton
                       aria-label={t('Attach')}
                       className='text-muted-foreground hover:text-foreground hover:bg-muted/70 font-medium'
-                      disabled={disabled}
+                      disabled={disabled || !isChatMode}
                       variant='ghost'
                     />
                   }
@@ -136,7 +138,7 @@ export function PlaygroundInputTools({
               <PromptInputButton
                 aria-label={t('Search')}
                 className='text-muted-foreground hover:text-foreground hover:bg-muted/70 font-medium'
-                disabled={disabled}
+                disabled={disabled || !isChatMode}
                 onClick={handleSearchAction}
                 variant='ghost'
               >
@@ -149,12 +151,20 @@ export function PlaygroundInputTools({
           </TooltipContent>
         </Tooltip>
 
-        <PlaygroundParameterPanel
+        {config.mode === 'chat' ? (
+          <PlaygroundParameterPanel
+            config={config}
+            disabled={disabled}
+            onConfigChange={onConfigChange}
+            onParameterEnabledChange={onParameterEnabledChange}
+            parameterEnabled={parameterEnabled}
+          />
+        ) : null}
+
+        <PlaygroundMediaPanel
           config={config}
           disabled={disabled}
           onConfigChange={onConfigChange}
-          onParameterEnabledChange={onParameterEnabledChange}
-          parameterEnabled={parameterEnabled}
         />
 
         <Tooltip>

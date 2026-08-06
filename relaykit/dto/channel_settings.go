@@ -116,11 +116,17 @@ type AdvancedCustomConfig struct {
 }
 
 type AdvancedCustomRoute struct {
-	IncomingPath string                   `json:"incoming_path,omitempty"`
-	UpstreamPath string                   `json:"upstream_path,omitempty"`
-	Converter    string                   `json:"converter,omitempty"`
-	Models       []string                 `json:"models,omitempty"`
-	Auth         *AdvancedCustomRouteAuth `json:"auth,omitempty"`
+	IncomingPath string `json:"incoming_path,omitempty"`
+	UpstreamPath string `json:"upstream_path,omitempty"`
+	// FetchPath/CancelPath are optional asynchronous-task routes. They are
+	// primarily used by the OpenAI-compatible video adapter; when omitted the
+	// adapter derives /{task_id} from the submit path (for example,
+	// /v1/videos/generations -> /v1/videos/{task_id}).
+	FetchPath  string                   `json:"fetch_path,omitempty"`
+	CancelPath string                   `json:"cancel_path,omitempty"`
+	Converter  string                   `json:"converter,omitempty"`
+	Models     []string                 `json:"models,omitempty"`
+	Auth       *AdvancedCustomRouteAuth `json:"auth,omitempty"`
 }
 
 type AdvancedCustomRouteAuth struct {
@@ -143,6 +149,9 @@ const (
 	advancedCustomEndpointPathJinaRerank             = "/v1/rerank"
 	advancedCustomEndpointPathImageGeneration        = "/v1/images/generations"
 	advancedCustomEndpointPathEmbeddings             = "/v1/embeddings"
+	advancedCustomEndpointPathVideo                  = "/v1/videos"
+	advancedCustomEndpointPathVideoGenerations       = "/v1/videos/generations"
+	advancedCustomEndpointPathLegacyVideoGenerations = "/v1/video/generations"
 )
 
 // AdvancedCustomModelListPath identifies the optional OpenAI Models discovery route.
@@ -247,6 +256,8 @@ func advancedCustomEndpointTypeFromIncomingPath(incomingPath string) (types.Endp
 		return types.EndpointTypeImageGeneration, true
 	case advancedCustomEndpointPathEmbeddings:
 		return types.EndpointTypeEmbeddings, true
+	case advancedCustomEndpointPathVideo, advancedCustomEndpointPathVideoGenerations, advancedCustomEndpointPathLegacyVideoGenerations:
+		return types.EndpointTypeOpenAIVideo, true
 	default:
 		if isAdvancedCustomGeminiIncomingPath(incomingPath) {
 			return types.EndpointTypeGemini, true
@@ -402,6 +413,17 @@ func (c *AdvancedCustomConfig) Validate() error {
 		}
 		if err := validateAdvancedCustomUpstreamTarget(i, upstreamPath); err != nil {
 			return err
+		}
+		for field, taskPath := range map[string]string{
+			"fetch_path":  strings.TrimSpace(route.FetchPath),
+			"cancel_path": strings.TrimSpace(route.CancelPath),
+		} {
+			if taskPath == "" {
+				continue
+			}
+			if err := validateAdvancedCustomUpstreamTarget(i, taskPath); err != nil {
+				return fmt.Errorf("advanced_custom.advanced_routes[%d].%s is invalid: %w", i, field, err)
+			}
 		}
 
 		if !IsAdvancedCustomConverterAllowed(route.Converter) {

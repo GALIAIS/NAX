@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	taskdto "github.com/QuantumNous/new-api/dto"
@@ -152,6 +153,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, errors.Wrap(err, "get_task_request_failed")
 	}
+	if uploaded, imageErr := relaycommon.MultipartImageData(c); imageErr != nil {
+		return nil, imageErr
+	} else if len(uploaded) > 0 {
+		taskReq.Images = append(uploaded, taskReq.ImageList()...)
+	}
 
 	aliReq, err := a.convertToAliRequest(info, taskReq)
 	if err != nil {
@@ -276,23 +282,28 @@ func firstNonEmpty(values ...string) string {
 }
 
 func firstTaskImage(req relaycommon.TaskSubmitReq) string {
-	if image := strings.TrimSpace(req.Image); image != "" {
-		return image
-	}
-	for _, image := range req.Images {
+	for _, image := range req.ImageList() {
 		if trimmed := strings.TrimSpace(image); trimmed != "" {
 			return trimmed
 		}
-	}
-	if inputReference := strings.TrimSpace(req.InputReference); inputReference != "" {
-		return inputReference
 	}
 	return ""
 }
 
 func secondTaskImage(req relaycommon.TaskSubmitReq) string {
+	// When both the legacy singular image and an images array are supplied,
+	// `image` is the explicit first frame and the array's last item is the
+	// explicit tail frame. Do not treat images[0] as the second frame in that
+	// mixed form.
+	if len(req.Images) > 1 {
+		for i := len(req.Images) - 1; i >= 0; i-- {
+			if trimmed := strings.TrimSpace(req.Images[i]); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
 	nonEmptyImages := 0
-	for _, image := range req.Images {
+	for _, image := range req.ImageList() {
 		trimmed := strings.TrimSpace(image)
 		if trimmed == "" {
 			continue
@@ -407,15 +418,8 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	}
 
 	// 处理时长
-	if req.Duration > 0 {
-		aliReq.Parameters.Duration = req.Duration
-	} else if req.Seconds != "" {
-		seconds, err := strconv.Atoi(req.Seconds)
-		if err != nil {
-			return nil, errors.Wrap(err, "convert seconds to int failed")
-		} else {
-			aliReq.Parameters.Duration = seconds
-		}
+	if seconds := req.RequestedDurationSeconds(); seconds > 0 {
+		aliReq.Parameters.Duration = int(math.Ceil(seconds))
 	}
 	if aliReq.Parameters.Duration <= 0 {
 		aliReq.Parameters.Duration = 5 // 默认5秒
@@ -564,16 +568,38 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	// 状态映射
-	switch aliResp.Output.TaskStatus {
-	case "PENDING":
+	switch strings.ToUpper(strings.TrimSpace(aliResp.Output.TaskStatus)) {
+	case "PENDING", "QUEUED", "CREATED", "SUBMITTED":
 		taskResult.Status = model.TaskStatusQueued
-	case "RUNNING":
+	case "RUNNING", "PROCESSING", "GENERATING":
 		taskResult.Status = model.TaskStatusInProgress
-	case "SUCCEEDED":
+	case "SUCCEEDED", "SUCCESS", "COMPLETED", "DONE":
 		taskResult.Status = model.TaskStatusSuccess
 		// 阿里直接返回视频URL，不需要额外的代理端点
 		taskResult.Url = aliResp.Output.VideoURL
-	case "FAILED", "CANCELED", "UNKNOWN":
+		if aliResp.Usage != nil {
+			if duration := float64(aliResp.Usage.Duration); duration > 0 {
+				taskResult.DurationSeconds = duration
+			}
+			if count := int(aliResp.Usage.VideoCount); count > 0 {
+				taskResult.OutputCount = count
+			}
+		}
+		if taskResult.OutputCount == 0 {
+			taskResult.OutputCount = 1
+		}
+		if submitted := parseAliTimestamp(aliResp.Output.SubmitTime); !submitted.IsZero() {
+			if scheduled := parseAliTimestamp(aliResp.Output.ScheduledTime); !scheduled.IsZero() {
+				taskResult.QueueSeconds = nonNegativeProviderSeconds(scheduled.Sub(submitted))
+			}
+			if finished := parseAliTimestamp(aliResp.Output.EndTime); !finished.IsZero() {
+				taskResult.TotalSeconds = nonNegativeProviderSeconds(finished.Sub(submitted))
+				if scheduled := parseAliTimestamp(aliResp.Output.ScheduledTime); !scheduled.IsZero() {
+					taskResult.ProcessingSeconds = nonNegativeProviderSeconds(finished.Sub(scheduled))
+				}
+			}
+		}
+	case "FAILED", "CANCELED", "CANCELLED", "ERROR", "UNKNOWN":
 		taskResult.Status = model.TaskStatusFailure
 		if aliResp.Message != "" {
 			taskResult.Reason = aliResp.Message
@@ -587,6 +613,26 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	return &taskResult, nil
+}
+
+func parseAliTimestamp(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05 -0700 MST", "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func nonNegativeProviderSeconds(duration time.Duration) float64 {
+	if duration <= 0 {
+		return 0
+	}
+	return duration.Seconds()
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
@@ -623,14 +669,20 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 }
 
 func convertAliStatus(aliStatus string) string {
-	switch aliStatus {
+	switch strings.ToUpper(strings.TrimSpace(aliStatus)) {
 	case "PENDING":
+		return dto.VideoStatusQueued
+	case "QUEUED", "CREATED", "SUBMITTED":
 		return dto.VideoStatusQueued
 	case "RUNNING":
 		return dto.VideoStatusInProgress
+	case "PROCESSING", "GENERATING":
+		return dto.VideoStatusInProgress
 	case "SUCCEEDED":
 		return dto.VideoStatusCompleted
-	case "FAILED", "CANCELED", "UNKNOWN":
+	case "SUCCESS", "COMPLETED", "DONE":
+		return dto.VideoStatusCompleted
+	case "FAILED", "CANCELED", "CANCELLED", "ERROR", "UNKNOWN":
 		return dto.VideoStatusFailed
 	default:
 		return dto.VideoStatusUnknown

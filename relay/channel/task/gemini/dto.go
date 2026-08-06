@@ -9,10 +9,18 @@ type VeoImageInput struct {
 
 // VeoInstance represents a single instance in the Veo predictLongRunning request.
 type VeoInstance struct {
-	Prompt string         `json:"prompt"`
-	Image  *VeoImageInput `json:"image,omitempty"`
-	// TODO: support referenceImages (style/asset references, up to 3 images)
-	// TODO: support lastFrame (first+last frame interpolation, Veo 3.1)
+	Prompt          string              `json:"prompt"`
+	Image           *VeoImageInput      `json:"image,omitempty"`
+	LastFrame       *VeoImageInput      `json:"lastFrame,omitempty"`
+	ReferenceImages []VeoReferenceImage `json:"referenceImages,omitempty"`
+}
+
+// VeoReferenceImage is the Google Veo reference-image shape. Keeping the
+// reference type explicit lets callers use style/asset references without
+// losing the provider-specific value during protocol conversion.
+type VeoReferenceImage struct {
+	Image         *VeoImageInput `json:"image,omitempty"`
+	ReferenceType string         `json:"referenceType,omitempty"`
 }
 
 // VeoParameters represents the parameters block for Veo predictLongRunning.

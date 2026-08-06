@@ -34,9 +34,11 @@ import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
 import { JsonCodeEditor } from '@/components/json-code-editor'
+import { MultiSelect, type Option } from '@/components/multi-select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import {
   Popover,
@@ -77,15 +79,11 @@ import {
   getAdvancedCustomAuthMode,
   getAdvancedCustomConverterDefaults,
   getAdvancedCustomConverterOptions,
-  getAdvancedCustomIncomingPathLabel,
-  getAdvancedCustomModelRuleKind,
-  getAdvancedCustomRegexModelPattern,
   getAdvancedCustomTemplateConfig,
   getAdvancedCustomUpstreamPathPlaceholder,
   getDefaultAdvancedCustomIncomingPath,
   isAdvancedCustomIncomingPathAllowed,
   normalizeAdvancedCustomConfig,
-  parseAdvancedCustomRouteModels,
   parseAdvancedCustomConfig,
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
@@ -100,6 +98,7 @@ import type {
 type AdvancedCustomEditorDialogProps = {
   open: boolean
   value: string
+  availableModels: string[]
   onOpenChange: (open: boolean) => void
   onSave: (value: string) => void
 }
@@ -116,6 +115,11 @@ const upstreamPathDescriptionKey =
 const catchAllOrderErrorMessage =
   'Catch-all route must be last for the same incoming path'
 const emptyAdvancedRoutes: AdvancedCustomRoute[] = []
+const advancedCustomIncomingPathOptions =
+  ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS.map((option) => ({
+    value: option.value,
+    label: `${option.label} · ${option.value}`,
+  }))
 
 type AdvancedCustomRouteRow = {
   route: AdvancedCustomRoute
@@ -166,6 +170,7 @@ function buildRouteGroups(
 export function AdvancedCustomEditorDialog({
   open,
   value,
+  availableModels,
   onOpenChange,
   onSave,
 }: AdvancedCustomEditorDialogProps) {
@@ -189,6 +194,7 @@ export function AdvancedCustomEditorDialog({
     )
   )
   const [jsonError, setJsonError] = useState('')
+  const [newIncomingPath, setNewIncomingPath] = useState('')
   const [templateKey, setTemplateKey] = useState(
     ADVANCED_CUSTOM_TEMPLATE_OPTIONS[0]?.value || ''
   )
@@ -217,16 +223,12 @@ export function AdvancedCustomEditorDialog({
     [routeKeys, routes]
   )
   const routeGroups = useMemo(() => buildRouteGroups(routeRows), [routeRows])
-  const usedIncomingPaths = useMemo(
-    () => new Set(routeGroups.map((routeGroup) => routeGroup.incomingPath)),
-    [routeGroups]
-  )
-  const availableIncomingPathOptions = useMemo(
+  const availableModelOptions = useMemo<Option[]>(
     () =>
-      ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS.filter(
-        (option) => !usedIncomingPaths.has(option.value)
-      ),
-    [usedIncomingPaths]
+      [...new Set(availableModels.map((model) => model.trim()).filter(Boolean))]
+        .sort((left, right) => left.localeCompare(right))
+        .map((model) => ({ value: model, label: model })),
+    [availableModels]
   )
   const validationError = useMemo(
     () => validateAdvancedCustomConfig(normalizedConfig),
@@ -264,7 +266,8 @@ export function AdvancedCustomEditorDialog({
   }
 
   const addRoute = (incomingPath: string | null) => {
-    if (!incomingPath || usedIncomingPaths.has(incomingPath)) return
+    const resolvedIncomingPath = incomingPath?.trim()
+    if (!resolvedIncomingPath) return
     setConfig((current) => {
       const next = normalizeAdvancedCustomConfig(current)
       return {
@@ -273,13 +276,14 @@ export function AdvancedCustomEditorDialog({
           ...(next.advanced_routes || []),
           {
             ...createAdvancedCustomRoute(),
-            incoming_path: incomingPath,
-            upstream_path: incomingPath,
+            incoming_path: resolvedIncomingPath,
+            upstream_path: resolvedIncomingPath,
           },
         ],
       }
     })
     setRouteKeys((current) => [...current, createRouteKey()])
+    setNewIncomingPath('')
   }
 
   const addRouteForIncomingPath = (incomingPath: string) => {
@@ -512,10 +516,10 @@ export function AdvancedCustomEditorDialog({
       onOpenChange={onOpenChange}
       title={t('Advanced Custom Routes')}
       description={t('Advanced Custom')}
-      contentClassName='flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-5xl'
+      contentClassName='flex max-h-[94vh] flex-col gap-0 p-0 sm:max-w-[min(96vw,90rem)]'
       headerClassName='border-b px-6 py-4'
       footerClassName='border-t px-6 py-4'
-      contentHeight='70vh'
+      contentHeight='78vh'
       footer={
         <>
           <Button
@@ -612,46 +616,27 @@ export function AdvancedCustomEditorDialog({
 
       {editMode === 'visual' ? (
         <div className='flex flex-col gap-4 p-4 lg:gap-3'>
-          <div className='flex justify-end border-y py-4 lg:py-2'>
-            <Select
-              items={availableIncomingPathOptions}
-              value={null}
-              onValueChange={(incomingPath) => {
-                if (typeof incomingPath === 'string') {
-                  addRoute(incomingPath)
+          <div className='bg-muted/20 flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center'>
+            <div className='min-w-0 flex-1'>
+              <Combobox
+                options={advancedCustomIncomingPathOptions}
+                value={newIncomingPath}
+                onValueChange={(incomingPath) =>
+                  setNewIncomingPath(incomingPath || '')
                 }
-              }}
+                allowCustomValue
+                placeholder={t('Incoming path')}
+              />
+            </div>
+            <Button
+              type='button'
+              size='sm'
+              disabled={!newIncomingPath.trim()}
+              onClick={() => addRoute(newIncomingPath)}
             >
-              <SelectTrigger
-                size='sm'
-                disabled={availableIncomingPathOptions.length === 0}
-              >
-                <Plus data-icon='inline-start' />
-                <SelectValue placeholder={t('Add route')} />
-              </SelectTrigger>
-              <SelectContent
-                align='end'
-                alignItemWithTrigger={false}
-                className={longSelectContentClass}
-              >
-                <SelectGroup>
-                  {availableIncomingPathOptions.map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={option.value}
-                      className={longSelectItemClass}
-                    >
-                      <div className='flex min-w-0 flex-col gap-1 leading-snug whitespace-normal'>
-                        <span>{option.label}</span>
-                        <span className='text-muted-foreground font-mono text-xs break-all'>
-                          {option.value}
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              <Plus data-icon='inline-start' />
+              {t('Add route')}
+            </Button>
           </div>
 
           {validationError ? (
@@ -684,9 +669,12 @@ export function AdvancedCustomEditorDialog({
           <div className='flex flex-col gap-4'>
             {routeGroups.map((routeGroup) => (
               <RouteGroupEditor
-                key={routeGroup.incomingPath || 'advanced-custom-empty-path'}
+                key={
+                  routeGroup.routeRows[0]?.routeKey ||
+                  'advanced-custom-empty-path'
+                }
                 group={routeGroup}
-                usedIncomingPaths={usedIncomingPaths}
+                availableModelOptions={availableModelOptions}
                 validationError={validationError}
                 onAddRoute={() =>
                   addRouteForIncomingPath(routeGroup.incomingPath)
@@ -735,7 +723,7 @@ export function AdvancedCustomEditorDialog({
 
 function RouteGroupEditor({
   group,
-  usedIncomingPaths,
+  availableModelOptions,
   validationError,
   onAddRoute,
   onIncomingPathChange,
@@ -745,7 +733,7 @@ function RouteGroupEditor({
   onRouteChange,
 }: {
   group: AdvancedCustomRouteGroup
-  usedIncomingPaths: ReadonlySet<string>
+  availableModelOptions: Option[]
   validationError: ReturnType<typeof validateAdvancedCustomConfig>
   onAddRoute: () => void
   onIncomingPathChange: (incomingPath: string | null) => void
@@ -757,7 +745,6 @@ function RouteGroupEditor({
   const { t } = useTranslation()
   const incomingPath = group.incomingPath || '/v1/chat/completions'
   const isModelListGroup = incomingPath === ADVANCED_CUSTOM_MODEL_LIST_PATH
-  const incomingPathLabel = getAdvancedCustomIncomingPathLabel(incomingPath)
   const catchAllRoute = group.routeRows.find((routeRow) =>
     isCatchAllRoute(routeRow.route)
   )
@@ -802,44 +789,14 @@ function RouteGroupEditor({
               <Badge variant='destructive'>{t('Fallback must be last')}</Badge>
             ) : null}
           </div>
-          <Select
-            items={ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS}
+          <Combobox
+            options={advancedCustomIncomingPathOptions}
             value={incomingPath}
             onValueChange={onIncomingPathChange}
-          >
-            <SelectTrigger className='h-9 max-w-full lg:max-w-[420px]'>
-              <SelectValue className='min-w-0 truncate'>
-                {incomingPathLabel}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent
-              alignItemWithTrigger={false}
-              className={longSelectContentClass}
-            >
-              <SelectGroup>
-                {ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS.map((option) => (
-                  <SelectItem
-                    key={option.value}
-                    value={option.value}
-                    disabled={
-                      (option.value !== incomingPath &&
-                        usedIncomingPaths.has(option.value)) ||
-                      (option.value === ADVANCED_CUSTOM_MODEL_LIST_PATH &&
-                        group.routeRows.length > 1)
-                    }
-                    className={longSelectItemClass}
-                  >
-                    <div className='flex min-w-0 flex-col gap-1 leading-snug whitespace-normal'>
-                      <span>{option.label}</span>
-                      <span className='text-muted-foreground font-mono text-xs break-all'>
-                        {option.value}
-                      </span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+            allowCustomValue
+            placeholder={t('Incoming path')}
+            className='h-9 max-w-full font-mono text-xs lg:max-w-[520px]'
+          />
         </div>
 
         {!isModelListGroup ? (
@@ -908,6 +865,7 @@ function RouteGroupEditor({
               key={routeRow.routeKey}
               route={routeRow.route}
               index={routeRow.index}
+              availableModelOptions={availableModelOptions}
               errorMessage={routeErrorMessage}
               canMoveUp={canMoveUp}
               canMoveDown={canMoveDown}
@@ -928,6 +886,7 @@ function RouteGroupEditor({
 function RouteEditor({
   route,
   index,
+  availableModelOptions,
   errorMessage,
   canMoveUp,
   canMoveDown,
@@ -940,6 +899,7 @@ function RouteEditor({
 }: {
   route: AdvancedCustomRoute
   index: number
+  availableModelOptions: Option[]
   errorMessage?: string
   canMoveUp: boolean
   canMoveDown: boolean
@@ -970,9 +930,12 @@ function RouteEditor({
     )?.triggerLabel || converterLabel
   const authLabel = getOptionLabel(ADVANCED_CUSTOM_AUTH_MODE_OPTIONS, authMode)
   const isNativeConverter = converter === 'none'
+  const isVideoRoute =
+    incomingPath === '/v1/videos' ||
+    incomingPath === '/v1/videos/generations' ||
+    incomingPath === '/v1/video/generations'
   const ConverterVisualIcon = isNativeConverter ? ArrowRight : Shuffle
-  const modelsInputValue = route.models?.join(', ') || ''
-  const parsedRouteModels = parseAdvancedCustomRouteModels(modelsInputValue)
+  const parsedRouteModels = route.models || []
   const isFallback = !isModelListRoute && parsedRouteModels.length === 0
 
   const setConverter = (nextConverter: AdvancedCustomConverter) => {
@@ -994,16 +957,6 @@ function RouteEditor({
 
   const setAuthMode = (mode: AdvancedCustomAuthMode) => {
     onChange({ auth: buildAdvancedCustomAuth(mode, route.auth) })
-  }
-
-  const setModelsInput = (value: string) => {
-    onChange({
-      models: value === '' ? [] : value.split(','),
-    })
-  }
-
-  const normalizeModelsInput = (value: string) => {
-    onChange({ models: parseAdvancedCustomRouteModels(value) })
   }
 
   const updateAuth = (
@@ -1121,44 +1074,12 @@ function RouteEditor({
               </Badge>
             </div>
           ) : (
-            <>
-              <Input
-                value={modelsInputValue}
-                onChange={(event) => setModelsInput(event.target.value)}
-                onBlur={(event) => normalizeModelsInput(event.target.value)}
-                placeholder={
-                  isFallback
-                    ? t('Leave empty for fallback')
-                    : t('e.g. gpt-4o, gemini-2.5-flash')
-                }
-                aria-invalid={Boolean(errorMessage)}
-              />
-              <div className='flex flex-wrap gap-1'>
-                {isFallback ? (
-                  <Badge variant='outline'>{t('Fallback')}</Badge>
-                ) : (
-                  parsedRouteModels.map((model) => {
-                    const ruleKind = getAdvancedCustomModelRuleKind(model)
-                    const displayModel =
-                      ruleKind === 'regex'
-                        ? getAdvancedCustomRegexModelPattern(model) || model
-                        : model
-                    return (
-                      <Badge
-                        key={model}
-                        variant={ruleKind === 'regex' ? 'outline' : 'secondary'}
-                        className='max-w-full gap-1.5 font-mono'
-                      >
-                        <span className='font-sans text-[10px] font-semibold tracking-normal uppercase'>
-                          {t(ruleKind === 'regex' ? 'Regex' : 'Exact')}
-                        </span>
-                        <span className='truncate'>{displayModel}</span>
-                      </Badge>
-                    )
-                  })
-                )}
-              </div>
-            </>
+            <AdvancedCustomModelSelector
+              models={parsedRouteModels}
+              options={availableModelOptions}
+              ariaInvalid={Boolean(errorMessage)}
+              onChange={(models) => onChange({ models })}
+            />
           )}
         </FieldBlock>
 
@@ -1182,6 +1103,32 @@ function RouteEditor({
           <p className='text-muted-foreground text-xs leading-relaxed lg:hidden'>
             {t(upstreamPathDescriptionKey)}
           </p>
+          {isVideoRoute ? (
+            <div className='mt-2 grid gap-2 sm:grid-cols-2'>
+              <label className='text-muted-foreground text-[10px]'>
+                {t('Fetch path')}
+                <Input
+                  value={route.fetch_path || ''}
+                  onChange={(event) =>
+                    onChange({ fetch_path: event.target.value })
+                  }
+                  placeholder='/v1/videos/{task_id}'
+                  aria-label={t('Fetch path')}
+                />
+              </label>
+              <label className='text-muted-foreground text-[10px]'>
+                {t('Cancel path')}
+                <Input
+                  value={route.cancel_path || ''}
+                  onChange={(event) =>
+                    onChange({ cancel_path: event.target.value })
+                  }
+                  placeholder='/v1/videos/{task_id}'
+                  aria-label={t('Cancel path')}
+                />
+              </label>
+            </div>
+          ) : null}
         </FieldBlock>
 
         <FieldBlock
@@ -1324,6 +1271,77 @@ function RouteEditor({
           </div>
         </>
       ) : null}
+    </div>
+  )
+}
+
+export function AdvancedCustomModelSelector(props: {
+  models: string[]
+  options: Option[]
+  ariaInvalid?: boolean
+  onChange: (models: string[]) => void
+}) {
+  const { t } = useTranslation()
+  const selectedModels = useMemo(
+    () => [
+      ...new Set(props.models.map((model) => model.trim()).filter(Boolean)),
+    ],
+    [props.models]
+  )
+  const selectedModelSet = useMemo(
+    () => new Set(selectedModels),
+    [selectedModels]
+  )
+  const missingChannelModels = useMemo(
+    () =>
+      props.options
+        .map((option) => option.value)
+        .filter((model) => !selectedModelSet.has(model)),
+    [props.options, selectedModelSet]
+  )
+
+  return (
+    <div className='min-w-0 space-y-2'>
+      <MultiSelect
+        options={props.options}
+        selected={selectedModels}
+        onChange={props.onChange}
+        placeholder={t('Select models or add custom ones')}
+        allowCreate
+        createLabel='Add custom model "{{value}}"'
+        maxVisibleChips={4}
+        copyChipOnClick
+        ariaInvalid={props.ariaInvalid}
+      />
+      <div className='flex flex-wrap items-center gap-1.5'>
+        {selectedModels.length === 0 ? (
+          <Badge variant='outline'>{t('Fallback')}</Badge>
+        ) : (
+          <Badge variant='secondary'>
+            {t('Selected {{count}}', { count: selectedModels.length })}
+          </Badge>
+        )}
+        <Button
+          type='button'
+          variant='ghost'
+          size='xs'
+          disabled={missingChannelModels.length === 0}
+          onClick={() =>
+            props.onChange([...selectedModels, ...missingChannelModels])
+          }
+        >
+          {t('Fill All Models')}
+        </Button>
+        <Button
+          type='button'
+          variant='ghost'
+          size='xs'
+          disabled={selectedModels.length === 0}
+          onClick={() => props.onChange([])}
+        >
+          {t('Clear All')}
+        </Button>
+      </div>
     </div>
   )
 }

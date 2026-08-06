@@ -128,6 +128,18 @@ export const ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS: AdvancedCustomIncomingPathOp
       label: 'OpenAI Image Edits',
     },
     {
+      value: '/v1/videos',
+      label: 'OpenAI Video',
+    },
+    {
+      value: '/v1/videos/generations',
+      label: 'OpenAI Video Generations',
+    },
+    {
+      value: '/v1/video/generations',
+      label: 'Video Generations (legacy)',
+    },
+    {
       value: '/v1/completions',
       label: 'OpenAI Completions',
     },
@@ -171,6 +183,9 @@ export const ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS: AdvancedCustomIncomingPathOp
 
 const ADVANCED_CUSTOM_ROUTE_SUMMARY_LABELS: Record<string, string> = {
   '/v1/chat/completions': 'OpenAI Chat',
+  '/v1/videos': 'OpenAI Video',
+  '/v1/videos/generations': 'OpenAI Video Generations',
+  '/v1/video/generations': 'Video Generations (legacy)',
   [ADVANCED_CUSTOM_MODEL_LIST_PATH]: ADVANCED_CUSTOM_MODEL_LIST_LABEL,
 }
 
@@ -340,7 +355,7 @@ export const ADVANCED_CUSTOM_TEMPLATE_OPTIONS: AdvancedCustomTemplateOption[] =
 export function cloneAdvancedCustomConfig(
   config: AdvancedCustomConfig
 ): AdvancedCustomConfig {
-  return JSON.parse(JSON.stringify(config)) as AdvancedCustomConfig
+  return structuredClone(config)
 }
 
 export function getAdvancedCustomTemplateConfig(
@@ -503,6 +518,7 @@ export function normalizeAdvancedCustomConfig(
     : []
 
   return {
+    ...config,
     advanced_routes: routes,
   }
 }
@@ -511,7 +527,7 @@ export function parseAdvancedCustomRouteModels(value: string): string[] {
   return [
     ...new Set(
       value
-        .split(',')
+        .split(/[,，\n]/)
         .map((model) => model.trim())
         .filter(Boolean)
     ),
@@ -712,6 +728,7 @@ function normalizeAdvancedCustomRoute(
   route: AdvancedCustomRoute
 ): AdvancedCustomRoute {
   const nextRoute: AdvancedCustomRoute = {
+    ...route,
     incoming_path: route.incoming_path || '',
     upstream_path: getAdvancedCustomRouteUpstreamPath(route),
     converter: route.converter || 'none',
@@ -719,13 +736,18 @@ function normalizeAdvancedCustomRoute(
   const models = normalizeAdvancedCustomRouteModels(route.models)
   if (models.length > 0) {
     nextRoute.models = models
+  } else {
+    delete nextRoute.models
   }
   if (route.auth) {
     nextRoute.auth = {
+      ...route.auth,
       type: route.auth.type,
       name: route.auth.name || '',
       value: route.auth.value || '',
     }
+  } else {
+    delete nextRoute.auth
   }
   return nextRoute
 }

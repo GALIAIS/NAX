@@ -83,6 +83,32 @@ export function PlaygroundMessageContent({
   const isMessageFinal =
     message.status !== MESSAGE_STATUS.LOADING &&
     message.status !== MESSAGE_STATUS.STREAMING
+  const hasMedia = (message.media?.length ?? 0) > 0
+
+  let renderedContent: ReactNode = null
+  if (isSourceVisible && showMessageContent) {
+    renderedContent = (
+      <CodeBlock
+        code={versionContent}
+        className='my-0 group-[.is-assistant]:w-full group-[.is-assistant]:max-w-[78ch]'
+        collapsedLines={24}
+        defaultCollapsed={false}
+        language='markdown'
+        maxExpandedLines={48}
+        showLineNumbers
+        showToolbar
+        title={t('Raw response')}
+      >
+        <CodeBlockCopyButton />
+      </CodeBlock>
+    )
+  } else if (!isSourceVisible && showMessageContent) {
+    renderedContent = (
+      <MessageContent variant='flat' className={cn(getMessageContentStyles())}>
+        <Response final={isMessageFinal}>{displayContent}</Response>
+      </MessageContent>
+    )
+  }
 
   return (
     <div
@@ -134,30 +160,44 @@ export function PlaygroundMessageContent({
         </>
       )}
 
-      {!isError && showMessageContent && (
+      {!isError && (showMessageContent || hasMedia) && (
         <>
-          {isSourceVisible ? (
-            <CodeBlock
-              code={versionContent}
-              className='my-0 group-[.is-assistant]:w-full group-[.is-assistant]:max-w-[78ch]'
-              collapsedLines={24}
-              defaultCollapsed={false}
-              language='markdown'
-              maxExpandedLines={48}
-              showLineNumbers
-              showToolbar
-              title={t('Raw response')}
-            >
-              <CodeBlockCopyButton />
-            </CodeBlock>
-          ) : (
-            <MessageContent
-              variant='flat'
-              className={cn(getMessageContentStyles())}
-            >
-              <Response final={isMessageFinal}>{displayContent}</Response>
-            </MessageContent>
-          )}
+          {hasMedia ? (
+            <div className='mb-3 grid gap-3 sm:grid-cols-2'>
+              {message.media?.map((media) =>
+                media.kind === 'image' ? (
+                  <a
+                    className='bg-muted/20 group relative overflow-hidden rounded-xl border'
+                    href={media.url}
+                    key={media.url}
+                    rel='noreferrer'
+                    target='_blank'
+                  >
+                    <img
+                      alt={media.alt || t('Generated image')}
+                      className='max-h-[min(60vh,32rem)] w-full object-contain transition-transform group-hover:scale-[1.01]'
+                      loading='lazy'
+                      src={media.url}
+                    />
+                    <span className='bg-background/80 text-muted-foreground absolute right-2 bottom-2 rounded px-2 py-1 text-[11px] opacity-0 backdrop-blur transition-opacity group-hover:opacity-100'>
+                      {t('Open media')}
+                    </span>
+                  </a>
+                ) : (
+                  <video
+                    className='bg-muted/20 max-h-[min(60vh,32rem)] w-full rounded-xl border object-contain'
+                    controls
+                    key={media.url}
+                    preload='metadata'
+                    src={media.url}
+                  >
+                    {t('Your browser does not support video playback.')}
+                  </video>
+                )
+              )}
+            </div>
+          ) : null}
+          {renderedContent}
           <MessageMetadata alignment={alignment} message={message} />
           {actions}
         </>

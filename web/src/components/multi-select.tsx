@@ -62,6 +62,8 @@ interface MultiSelectProps {
   id?: string
   /** Disable the entire control. */
   disabled?: boolean
+  /** Exposes validation state to assistive technology and form styling. */
+  ariaInvalid?: boolean
   /**
    * Limits rendered chips while keeping all values selected.
    * Hidden values remain searchable/removable from the dropdown.
@@ -164,7 +166,7 @@ export function MultiSelect(props: MultiSelectProps) {
     if (canCreate) {
       set.add(trimmedInput)
     }
-    return Array.from(set)
+    return [...set]
   }, [props.options, props.selected, canCreate, trimmedInput])
 
   const addValues = React.useCallback(
@@ -259,6 +261,7 @@ export function MultiSelect(props: MultiSelectProps) {
     >
       <ComboboxChips
         ref={chipsAnchorRef}
+        aria-invalid={props.ariaInvalid || undefined}
         className={cn('w-full', props.className)}
       >
         <ComboboxValue>

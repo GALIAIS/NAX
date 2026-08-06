@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,12 +30,14 @@ type TaskAdaptor struct {
 	ChannelType int
 	apiKey      string
 	baseURL     string
+	proxy       string
 }
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
 	a.apiKey = info.ApiKey
+	a.proxy = info.ChannelSetting.Proxy
 }
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
@@ -60,6 +63,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	req, ok := v.(relaycommon.TaskSubmitReq)
 	if !ok {
 		return nil, fmt.Errorf("invalid request type in context")
+	}
+	if uploaded, imageErr := relaycommon.MultipartImageData(c); imageErr != nil {
+		return nil, imageErr
+	} else if len(uploaded) > 0 {
+		req.Images = append(uploaded, req.ImageList()...)
 	}
 
 	body, err := a.convertToRequestPayload(&req, info)
@@ -143,11 +151,26 @@ func (a *TaskAdaptor) GetChannelName() string {
 	return ChannelName
 }
 
+func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return nil
+	}
+	duration := float64(DefaultDuration)
+	if seconds := req.RequestedDurationSeconds(); seconds > 0 {
+		duration = seconds
+	}
+	if duration > relaycommon.MaxTaskDurationSeconds {
+		duration = relaycommon.MaxTaskDurationSeconds
+	}
+	return map[string]float64{"seconds": duration}
+}
+
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*VideoRequest, error) {
 	modelConfig := GetModelConfig(info.UpstreamModelName)
 	duration := DefaultDuration
-	if req.Duration > 0 {
-		duration = req.Duration
+	if seconds := req.RequestedDurationSeconds(); seconds > 0 {
+		duration = int(math.Ceil(seconds))
 	}
 	resolution := modelConfig.DefaultResolution
 	if req.Size != "" {
@@ -159,6 +182,13 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		Prompt:     req.Prompt,
 		Duration:   &duration,
 		Resolution: resolution,
+	}
+	images := req.ImageList()
+	if len(images) > 0 {
+		videoRequest.FirstFrameImage = images[0]
+	}
+	if len(images) > 1 {
+		videoRequest.LastFrameImage = images[1]
 	}
 	if err := req.UnmarshalMetadata(&videoRequest); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata to video request failed")
@@ -199,18 +229,22 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Progress = "100%"
 	}
 
-	switch resTask.Status {
-	case TaskStatusPreparing, TaskStatusQueueing, TaskStatusProcessing:
+	switch strings.ToLower(strings.TrimSpace(resTask.Status)) {
+	case strings.ToLower(TaskStatusPreparing), strings.ToLower(TaskStatusQueueing), strings.ToLower(TaskStatusProcessing), "queued", "running", "in_progress":
 		taskResult.Status = model.TaskStatusInProgress
 		taskResult.Progress = "30%"
 		if resTask.Status == TaskStatusProcessing {
 			taskResult.Progress = "50%"
 		}
-	case TaskStatusSuccess:
+	case strings.ToLower(TaskStatusSuccess), "succeeded", "completed", "done":
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Progress = "100%"
+		taskResult.OutputCount = 1
 		taskResult.Url = a.buildVideoURL(resTask.TaskID, resTask.FileID)
-	case TaskStatusFailed:
+		if resTask.Duration > 0 {
+			taskResult.DurationSeconds = resTask.Duration
+		}
+	case strings.ToLower(TaskStatusFailed), "cancelled", "canceled", "error":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
 		if taskResult.Reason == "" {
@@ -261,7 +295,11 @@ func (a *TaskAdaptor) buildVideoURL(_, fileID string) string {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 
-	resp, err := service.GetHttpClient().Do(req)
+	client, err := service.GetHttpClientWithProxy(a.proxy)
+	if err != nil {
+		return ""
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return ""
 	}

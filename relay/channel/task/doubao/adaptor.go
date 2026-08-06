@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -141,13 +142,21 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	if err != nil {
 		return nil
 	}
+	seconds := req.RequestedDurationSeconds()
+	if seconds <= 0 {
+		seconds = 5
+	}
+	if seconds > relaycommon.MaxTaskDurationSeconds {
+		seconds = relaycommon.MaxTaskDurationSeconds
+	}
+	ratioMap := map[string]float64{"seconds": seconds}
 	hasVideo := hasVideoInMetadata(req.Metadata)
 	resolution, _ := req.Metadata["resolution"].(string)
 	ratio, ok := GetVideoInputRatio(info.OriginModelName, resolution, hasVideo)
-	if !ok || ratio == 1.0 {
-		return nil
+	if ok && ratio != 1.0 {
+		ratioMap["video_input"] = ratio
 	}
-	return map[string]float64{"video_input": ratio}
+	return ratioMap
 }
 
 // hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
@@ -184,6 +193,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil, err
+	}
+	if uploaded, imageErr := relaycommon.MultipartImageData(c); imageErr != nil {
+		return nil, imageErr
+	} else if len(uploaded) > 0 {
+		req.Images = append(uploaded, req.ImageList()...)
 	}
 
 	body, err := a.convertToRequestPayload(&req)
@@ -294,8 +308,8 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
 
-	if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
-		r.Duration = lo.ToPtr(dto.IntValue(sec))
+	if seconds := req.RequestedDurationSeconds(); seconds > 0 {
+		r.Duration = lo.ToPtr(dto.IntValue(math.Ceil(seconds)))
 	}
 
 	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
@@ -318,21 +332,28 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	// Map Doubao status to internal status
-	switch resTask.Status {
+	switch strings.ToLower(strings.TrimSpace(resTask.Status)) {
 	case "pending", "queued":
 		taskResult.Status = model.TaskStatusQueued
 		taskResult.Progress = "10%"
 	case "processing", "running":
 		taskResult.Status = model.TaskStatusInProgress
 		taskResult.Progress = "50%"
-	case "succeeded":
+	case "succeeded", "success", "completed", "done":
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Progress = "100%"
 		taskResult.Url = resTask.Content.VideoURL
+		if resTask.Duration > 0 {
+			taskResult.DurationSeconds = float64(resTask.Duration)
+		}
+		taskResult.OutputCount = 1
+		if elapsed := providerElapsedSeconds(resTask.CreatedAt, resTask.UpdatedAt); elapsed > 0 {
+			taskResult.TotalSeconds = elapsed
+		}
 		// 解析 usage 信息用于按倍率计费
 		taskResult.CompletionTokens = resTask.Usage.CompletionTokens
 		taskResult.TotalTokens = resTask.Usage.TotalTokens
-	case "failed":
+	case "failed", "cancelled", "canceled", "error":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
 		taskResult.Reason = resTask.Error.Message
@@ -343,6 +364,18 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	return &taskResult, nil
+}
+
+func providerElapsedSeconds(createdAt, updatedAt int64) float64 {
+	if createdAt <= 0 || updatedAt <= createdAt {
+		return 0
+	}
+	// A few Doubao gateways return millisecond timestamps while the official
+	// endpoint uses seconds. Normalize both forms before exposing timing data.
+	if createdAt > 1_000_000_000_000 || updatedAt > 1_000_000_000_000 {
+		return float64(updatedAt-createdAt) / 1000
+	}
+	return float64(updatedAt - createdAt)
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {

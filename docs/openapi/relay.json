@@ -71,6 +71,12 @@
     }
   ],
   "paths": {
+    "/v1/videos/generations": {
+      "$ref": "#/paths/~1v1~1videos"
+    },
+    "/v1/videos/generations/{task_id}": {
+      "$ref": "#/paths/~1v1~1videos~1{task_id}"
+    },
     "/v1/models": {
       "get": {
         "summary": "获取模型列表",
@@ -574,6 +580,98 @@
                     "example": "8",
                     "type": "string"
                   },
+                  "duration": {
+                    "description": "生成时长（秒），兼容非 OpenAI 视频协议",
+                    "example": 8,
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 3600
+                  },
+                  "size": {
+                    "description": "输出尺寸，例如 1280x720",
+                    "example": "1280x720",
+                    "type": "string"
+                  },
+                  "resolution": {
+                    "description": "输出分辨率，例如 720p/1080p",
+                    "example": "720p",
+                    "type": "string"
+                  },
+                  "aspect_ratio": {
+                    "description": "画面比例，例如 16:9",
+                    "example": "16:9",
+                    "type": "string"
+                  },
+                  "quality": {
+                    "description": "质量档位（由上游模型决定）",
+                    "example": "high",
+                    "type": "string"
+                  },
+                  "width": {
+                    "description": "输出宽度",
+                    "example": 1280,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 16384
+                  },
+                  "height": {
+                    "description": "输出高度",
+                    "example": 720,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 16384
+                  },
+                  "fps": {
+                    "description": "帧率",
+                    "example": 24,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 240
+                  },
+                  "n": {
+                    "description": "生成数量",
+                    "example": 1,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 16
+                  },
+                  "seed": {
+                    "description": "随机种子",
+                    "example": 42,
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "reference_images": {
+                    "description": "参考图片 URL 列表",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "first_frame_image": {
+                    "description": "首帧图片 URL 或 Base64",
+                    "type": "string"
+                  },
+                  "last_frame_image": {
+                    "description": "尾帧图片 URL 或 Base64",
+                    "type": "string"
+                  },
+                  "images": {
+                    "description": "多图输入（可重复提交该字段）",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "response_format": {
+                    "description": "结果格式",
+                    "example": "url",
+                    "type": "string"
+                  },
+                  "user": {
+                    "description": "调用方用户标识",
+                    "type": "string"
+                  },
                   "input_reference": {
                     "format": "binary",
                     "type": "string",
@@ -770,6 +868,62 @@
               }
             },
             "headers": {}
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "取消视频任务",
+        "description": "取消尚未完成的视频任务并退还未结算额度。上游取消接口由渠道适配器尽力调用；网关本地任务状态以原子方式变更为 failed。",
+        "operationId": "cancelVideo",
+        "tags": [
+          "视频生成/Sora兼容格式"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "视频任务 ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务已取消",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAIVideo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "任务已完成或已被其他请求取消",
+            "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ErrorResponse"
+                  }
+                }
+            }
           }
         },
         "security": [
@@ -4184,6 +4338,32 @@
             "description": "图片输入 (URL 或 Base64)",
             "example": "https://example.com/image.jpg"
           },
+          "images": {
+            "type": "array",
+            "description": "多图/首尾帧输入（按顺序传递）",
+            "items": {
+              "type": "string"
+            }
+          },
+          "input_reference": {
+            "type": "string",
+            "description": "OpenAI 视频协议的参考图片 URL 或 Base64"
+          },
+          "reference_images": {
+            "type": "array",
+            "description": "参考图片 URL 列表",
+            "items": {
+              "type": "string"
+            }
+          },
+          "first_frame_image": {
+            "type": "string",
+            "description": "首帧图片 URL 或 Base64"
+          },
+          "last_frame_image": {
+            "type": "string",
+            "description": "尾帧图片 URL 或 Base64"
+          },
           "duration": {
             "type": "number",
             "description": "视频时长（秒）",
@@ -4192,12 +4372,30 @@
           "width": {
             "type": "integer",
             "description": "视频宽度",
-            "example": 1280
+            "example": 1280,
+            "minimum": 0,
+            "maximum": 16384
           },
           "height": {
             "type": "integer",
             "description": "视频高度",
-            "example": 720
+            "example": 720,
+            "minimum": 0,
+            "maximum": 16384
+          },
+          "resolution": {
+            "type": "string",
+            "description": "输出分辨率（例如 720p、1080p）",
+            "example": "720p"
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "description": "画面比例",
+            "example": "16:9"
+          },
+          "quality": {
+            "type": "string",
+            "description": "质量档位"
           },
           "fps": {
             "type": "integer",
@@ -4281,6 +4479,12 @@
           "metadata": {
             "$ref": "#/components/schemas/VideoTaskMetadata"
           },
+          "timing": {
+            "$ref": "#/components/schemas/TaskTiming"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/TaskBillingSummary"
+          },
           "error": {
             "$ref": "#/components/schemas/VideoTaskError"
           }
@@ -4294,6 +4498,11 @@
             "type": "number",
             "description": "实际生成的视频时长",
             "example": 5
+          },
+          "count": {
+            "type": "integer",
+            "description": "实际生成数量",
+            "example": 1
           },
           "fps": {
             "type": "integer",
@@ -4417,6 +4626,76 @@
           "code": {
             "type": "string",
             "description": "错误码"
+          }
+        }
+      },
+      "TaskTiming": {
+        "type": "object",
+        "description": "异步任务生命周期耗时（秒）",
+        "properties": {
+          "requested_duration_seconds": {
+            "type": "number"
+          },
+          "actual_duration_seconds": {
+            "type": "number"
+          },
+          "requested_output_count": {
+            "type": "integer"
+          },
+          "actual_output_count": {
+            "type": "integer"
+          },
+          "queue_seconds": {
+            "type": "number"
+          },
+          "processing_seconds": {
+            "type": "number"
+          },
+          "total_seconds": {
+            "type": "number"
+          },
+          "poll_count": {
+            "type": "integer"
+          },
+          "last_polled_at": {
+            "type": "integer"
+          }
+        }
+      },
+      "TaskBillingSummary": {
+        "type": "object",
+        "description": "异步任务预扣与最终消费快照",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "per_call",
+              "dynamic"
+            ]
+          },
+          "pre_consumed_quota": {
+            "type": "integer"
+          },
+          "actual_quota": {
+            "type": "integer"
+          },
+          "model_price": {
+            "type": "number"
+          },
+          "model_ratio": {
+            "type": "number"
+          },
+          "group_ratio": {
+            "type": "number"
+          },
+          "other_ratios": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "settled": {
+            "type": "boolean"
           }
         }
       },

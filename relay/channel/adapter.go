@@ -82,3 +82,10 @@ type TaskAdaptor interface {
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
+
+// TaskCanceller is optional because asynchronous providers expose different
+// cancellation endpoints. The gateway always performs its local atomic
+// cancellation; implementations use this hook for best-effort upstream stop.
+type TaskCanceller interface {
+	CancelTask(baseURL, key, taskID, proxy string) error
+}

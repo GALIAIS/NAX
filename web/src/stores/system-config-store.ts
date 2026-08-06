@@ -20,6 +20,10 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 import { DEFAULT_SYSTEM_NAME, DEFAULT_LOGO } from '@/lib/constants'
+import {
+  DEFAULT_GLOBAL_THEME_SETTINGS,
+  type GlobalThemeSettings,
+} from '@/lib/theme-customization'
 
 export type CurrencyDisplayType = 'USD' | 'CNY' | 'TOKENS' | 'CUSTOM'
 
@@ -45,6 +49,7 @@ export interface SystemConfig {
   demoSiteEnabled?: boolean
   displayTokenStatEnabled?: boolean
   currency: CurrencyConfig
+  globalTheme: GlobalThemeSettings
 }
 
 export const DEFAULT_CURRENCY_CONFIG: CurrencyConfig = {
@@ -76,6 +81,7 @@ export const useSystemConfigStore = create<SystemConfigState>()(
         systemName: DEFAULT_SYSTEM_NAME,
         logo: DEFAULT_LOGO,
         currency: { ...DEFAULT_CURRENCY_CONFIG },
+        globalTheme: { ...DEFAULT_GLOBAL_THEME_SETTINGS },
       },
       loading: true,
       loadedLogoUrl: DEFAULT_LOGO,
@@ -86,7 +92,7 @@ export const useSystemConfigStore = create<SystemConfigState>()(
             ...newConfig,
             currency: {
               ...state.config.currency,
-              ...(newConfig.currency ?? {}),
+              ...newConfig.currency,
             },
           },
         })),
@@ -95,10 +101,49 @@ export const useSystemConfigStore = create<SystemConfigState>()(
     }),
     {
       name: 'system-config-storage',
-      partialize: (state) => ({
-        config: state.config,
-        loadedLogoUrl: state.loadedLogoUrl,
-      }),
+      merge: (persistedState, currentState) => {
+        const persisted =
+          persistedState && typeof persistedState === 'object'
+            ? (persistedState as Record<string, unknown>)
+            : {}
+        const persistedConfig =
+          persisted.config && typeof persisted.config === 'object'
+            ? (persisted.config as Record<string, unknown>)
+            : {}
+        const persistedCurrency =
+          persistedConfig.currency &&
+          typeof persistedConfig.currency === 'object'
+            ? (persistedConfig.currency as Partial<CurrencyConfig>)
+            : {}
+
+        return {
+          ...currentState,
+          config: {
+            ...currentState.config,
+            ...(persistedConfig as Partial<SystemConfig>),
+            currency: {
+              ...currentState.config.currency,
+              ...persistedCurrency,
+            },
+            // Never hydrate the administrator-owned theme from browser
+            // storage. The server status response is the only authority.
+            globalTheme: currentState.config.globalTheme,
+          },
+          loadedLogoUrl:
+            typeof persisted.loadedLogoUrl === 'string'
+              ? persisted.loadedLogoUrl
+              : currentState.loadedLogoUrl,
+        }
+      },
+      partialize: (state) => {
+        // The theme is deliberately not persisted in the browser: it is an
+        // administrator-owned server option, never a per-user preference.
+        const { globalTheme: _globalTheme, ...config } = state.config
+        return {
+          config,
+          loadedLogoUrl: state.loadedLogoUrl,
+        }
+      },
     }
   )
 )

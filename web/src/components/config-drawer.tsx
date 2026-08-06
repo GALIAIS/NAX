@@ -34,7 +34,6 @@ import { IconThemeLight } from '@/assets/custom/icon-theme-light'
 import { IconThemeSystem } from '@/assets/custom/icon-theme-system'
 import {
   sideDrawerContentClassName,
-  sideDrawerFooterClassName,
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
@@ -43,7 +42,6 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
-  SheetFooter,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -61,6 +59,7 @@ import {
   type ThemeScale,
 } from '@/lib/theme-customization'
 import { cn } from '@/lib/utils'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { useSidebar } from './ui/sidebar'
 
@@ -68,19 +67,6 @@ const Item = RadioPrimitive.Root
 
 export function ConfigDrawer() {
   const { t } = useTranslation()
-  const { setOpen } = useSidebar()
-  const { resetDir } = useDirection()
-  const { resetTheme } = useTheme()
-  const { resetLayout } = useLayout()
-  const { resetCustomization } = useThemeCustomization()
-
-  const handleReset = () => {
-    setOpen(true)
-    resetDir()
-    resetTheme()
-    resetLayout()
-    resetCustomization()
-  }
 
   return (
     <Sheet>
@@ -101,31 +87,52 @@ export function ConfigDrawer() {
         <SheetHeader className={sideDrawerHeaderClassName()}>
           <SheetTitle>{t('Theme Settings')}</SheetTitle>
           <SheetDescription id='config-drawer-description'>
-            {t('Adjust the appearance and layout to suit your preferences.')}
+            {t(
+              'The administrator controls the appearance and layout for all users.'
+            )}
           </SheetDescription>
         </SheetHeader>
         <div className={sideDrawerFormClassName()}>
-          <ThemeConfig />
-          <PresetConfig />
-          <FontConfig />
-          <RadiusConfig />
-          <ScaleConfig />
-          <SidebarConfig />
-          <LayoutConfig />
-          <ContentLayoutConfig />
-          <DirConfig />
-        </div>
-        <SheetFooter className={sideDrawerFooterClassName('grid-cols-1')}>
-          <Button
-            variant='destructive'
-            onClick={handleReset}
-            aria-label={t('Reset all settings to default values')}
+          <GlobalThemeSummary />
+          <fieldset
+            disabled
+            aria-disabled='true'
+            className='space-y-6 opacity-60'
           >
-            {t('Reset')}
-          </Button>
-        </SheetFooter>
+            <ThemeConfig />
+            <PresetConfig />
+            <FontConfig />
+            <RadiusConfig />
+            <ScaleConfig />
+            <SidebarConfig />
+            <LayoutConfig />
+            <ContentLayoutConfig />
+            <DirConfig />
+          </fieldset>
+        </div>
       </SheetContent>
     </Sheet>
+  )
+}
+
+function GlobalThemeSummary() {
+  const { t } = useTranslation()
+  const globalTheme = useSystemConfigStore((state) => state.config.globalTheme)
+
+  return (
+    <div className='bg-muted/30 border-border/70 space-y-1.5 rounded-lg border p-3'>
+      <p className='text-sm font-medium'>{t('Administrator-managed theme')}</p>
+      <p className='text-muted-foreground text-xs leading-relaxed'>
+        {t(
+          'The administrator controls the theme globally. Local appearance controls are disabled so every user sees the same interface.'
+        )}
+      </p>
+      {globalTheme ? (
+        <p className='text-muted-foreground font-mono text-[11px]'>
+          {globalTheme.theme} · {globalTheme.preset} · {globalTheme.font}
+        </p>
+      ) : null}
+    </div>
   )
 }
 

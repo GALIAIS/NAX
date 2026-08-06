@@ -78,7 +78,14 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
 	// Use the standard validation method for TaskSubmitReq
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
+	if taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate); taskErr != nil {
+		return taskErr
+	}
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+	return geminitask.ValidateVeoRequest(req)
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -137,6 +144,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	return map[string]float64{
 		"seconds":    float64(seconds),
 		"resolution": resRatio,
+		"count":      float64(req.RequestedOutputCount()),
 	}
 }
 
@@ -149,12 +157,26 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	req := v.(relaycommon.TaskSubmitReq)
 
 	instance := geminitask.VeoInstance{Prompt: req.Prompt}
-	if img := geminitask.ExtractMultipartImage(c, info); img != nil {
-		instance.Image = img
-	} else if len(req.Images) > 0 {
-		if parsed := geminitask.ParseImageInput(req.Images[0]); parsed != nil {
+	images, imageErr := relaycommon.MultipartImageData(c, "input_reference", "image", "images", "first_frame_image", "last_frame_image", "reference_images")
+	if imageErr != nil {
+		return nil, imageErr
+	}
+	images = append(images, req.ImageList()...)
+	if len(images) > 0 {
+		if parsed := geminitask.ParseImageInput(images[0]); parsed != nil {
 			instance.Image = parsed
 			info.Action = constant.TaskActionGenerate
+		}
+		if len(images) > 1 {
+			instance.LastFrame = geminitask.ParseImageInput(images[1])
+		}
+		for _, image := range images[2:] {
+			if parsed := geminitask.ParseImageInput(image); parsed != nil {
+				instance.ReferenceImages = append(instance.ReferenceImages, geminitask.VeoReferenceImage{
+					Image:         parsed,
+					ReferenceType: "asset",
+				})
+			}
 		}
 	}
 
@@ -162,8 +184,8 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, params); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata failed: %w", err)
 	}
-	if params.DurationSeconds == 0 && req.Duration > 0 {
-		params.DurationSeconds = req.Duration
+	if params.DurationSeconds == 0 {
+		params.DurationSeconds = geminitask.ResolveVeoDuration(req.Metadata, req.Duration, req.Seconds)
 	}
 	if params.Resolution == "" && req.Size != "" {
 		params.Resolution = geminitask.SizeToVeoResolution(req.Size)
@@ -172,7 +194,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		params.AspectRatio = geminitask.SizeToVeoAspectRatio(req.Size)
 	}
 	params.Resolution = strings.ToLower(params.Resolution)
-	params.SampleCount = 1
+	params.SampleCount = req.RequestedOutputCount()
+	if params.SampleCount <= 0 {
+		params.SampleCount = 1
+	}
 
 	body := geminitask.VeoRequestPayload{
 		Instances:  []geminitask.VeoInstance{instance},
@@ -303,6 +328,10 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 	ti.Status = model.TaskStatusSuccess
 	ti.Progress = "100%"
+	ti.OutputCount = len(op.Response.Videos)
+	if ti.OutputCount == 0 {
+		ti.OutputCount = 1
+	}
 	if len(op.Response.Videos) > 0 {
 		v0 := op.Response.Videos[0]
 		if v0.BytesBase64Encoded != "" {

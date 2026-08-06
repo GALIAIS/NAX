@@ -80,9 +80,13 @@ export const THEME_PRESETS = [
 ] as const
 
 export type ThemePreset = (typeof THEME_PRESETS)[number]['value']
+export type ThemeMode = 'dark' | 'light' | 'system'
 export type ThemeRadius = 'default' | 'none' | 'sm' | 'md' | 'lg' | 'xl'
 export type ThemeScale = 'default' | 'sm' | 'lg' | 'xl'
 export type ContentLayout = 'full' | 'centered'
+export type GlobalLayoutVariant = 'inset' | 'sidebar' | 'floating'
+export type GlobalLayoutCollapsible = 'offcanvas' | 'icon' | 'none'
+export type GlobalDirection = 'ltr' | 'rtl'
 
 /**
  * Font axis for the theme.
@@ -122,6 +126,39 @@ export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {
   scale: 'default',
   contentLayout: 'full',
 }
+
+/** Theme values delivered by `/api/status` and controlled by administrators. */
+export type GlobalThemeSettings = ThemeCustomization & {
+  theme: ThemeMode
+  layoutVariant: GlobalLayoutVariant
+  layoutCollapsible: GlobalLayoutCollapsible
+  direction: GlobalDirection
+}
+
+export const DEFAULT_GLOBAL_THEME_SETTINGS: GlobalThemeSettings = {
+  theme: 'system',
+  ...DEFAULT_THEME_CUSTOMIZATION,
+  layoutVariant: 'inset',
+  layoutCollapsible: 'icon',
+  direction: 'ltr',
+}
+
+export const GLOBAL_THEME_MODE_VALUES: ReadonlySet<ThemeMode> = new Set([
+  'dark',
+  'light',
+  'system',
+])
+
+export const GLOBAL_LAYOUT_VARIANT_VALUES: ReadonlySet<GlobalLayoutVariant> =
+  new Set(['inset', 'sidebar', 'floating'])
+
+export const GLOBAL_LAYOUT_COLLAPSIBLE_VALUES: ReadonlySet<GlobalLayoutCollapsible> =
+  new Set(['offcanvas', 'icon', 'none'])
+
+export const GLOBAL_DIRECTION_VALUES: ReadonlySet<GlobalDirection> = new Set([
+  'ltr',
+  'rtl',
+])
 
 export const THEME_PRESET_VALUES = new Set(
   THEME_PRESETS.map((p) => p.value)
@@ -194,4 +231,79 @@ export function resolveThemeFont(
     return PRESET_DEFAULT_FONT[preset] ?? 'sans'
   }
   return font
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function readAllowedValue<T extends string>(
+  value: unknown,
+  allowed: ReadonlySet<T>,
+  fallback: T
+): T {
+  return typeof value === 'string' && allowed.has(value as T)
+    ? (value as T)
+    : fallback
+}
+
+/**
+ * Normalize the backend payload. This deliberately accepts unknown so a
+ * stale/corrupt local status cache cannot let a user override the global
+ * appearance or crash the provider.
+ */
+export function normalizeGlobalThemeSettings(
+  value: unknown
+): GlobalThemeSettings {
+  if (!isRecord(value)) {
+    return DEFAULT_GLOBAL_THEME_SETTINGS
+  }
+
+  return {
+    theme: readAllowedValue(
+      value.theme,
+      GLOBAL_THEME_MODE_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.theme
+    ),
+    preset: readAllowedValue(
+      value.preset,
+      THEME_PRESET_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.preset
+    ),
+    font: readAllowedValue(
+      value.font,
+      THEME_FONT_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.font
+    ),
+    radius: readAllowedValue(
+      value.radius,
+      THEME_RADIUS_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.radius
+    ),
+    scale: readAllowedValue(
+      value.scale,
+      THEME_SCALE_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.scale
+    ),
+    contentLayout: readAllowedValue(
+      value.content_layout ?? value.contentLayout,
+      CONTENT_LAYOUT_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.contentLayout
+    ),
+    layoutVariant: readAllowedValue(
+      value.layout_variant ?? value.layoutVariant,
+      GLOBAL_LAYOUT_VARIANT_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.layoutVariant
+    ),
+    layoutCollapsible: readAllowedValue(
+      value.layout_collapsible ?? value.layoutCollapsible,
+      GLOBAL_LAYOUT_COLLAPSIBLE_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.layoutCollapsible
+    ),
+    direction: readAllowedValue(
+      value.direction,
+      GLOBAL_DIRECTION_VALUES,
+      DEFAULT_GLOBAL_THEME_SETTINGS.direction
+    ),
+  }
 }

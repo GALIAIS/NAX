@@ -14,11 +14,12 @@ func SetVideoRouter(router *gin.Engine) {
 	videoProxyRouter.Use(middleware.TokenOrUserAuth())
 	{
 		videoProxyRouter.GET("/videos/:task_id/content", controller.VideoProxy)
+		videoProxyRouter.HEAD("/videos/:task_id/content", controller.VideoProxy)
 	}
 
 	videoV1Router := router.Group("/v1")
 	videoV1Router.Use(middleware.RouteTag("relay"))
-	videoV1Router.Use(middleware.TokenAuth(), middleware.Distribute())
+	videoV1Router.Use(middleware.TokenOrUserAuth(), middleware.Distribute())
 	{
 		videoV1Router.POST("/video/generations", controller.RelayTask)
 		videoV1Router.GET("/video/generations/:task_id", controller.RelayTaskFetch)
@@ -29,6 +30,22 @@ func SetVideoRouter(router *gin.Engine) {
 	{
 		videoV1Router.POST("/videos", controller.RelayTask)
 		videoV1Router.GET("/videos/:task_id", controller.RelayTaskFetch)
+		// Several OpenAI-compatible providers expose the plural
+		// /videos/generations spelling (Grok2API and common gateways). Keep it
+		// on the same task pipeline so submit/fetch/content semantics match the
+		// canonical /videos endpoint.
+		videoV1Router.POST("/videos/generations", controller.RelayTask)
+		videoV1Router.GET("/videos/generations/:task_id", controller.RelayTaskFetch)
+	}
+	videoCancelRouter := router.Group("/v1")
+	videoCancelRouter.Use(middleware.RouteTag("relay"), middleware.TokenOrUserAuth())
+	{
+		videoCancelRouter.DELETE("/videos/:task_id", controller.CancelVideoTask)
+		videoCancelRouter.POST("/videos/:task_id/cancel", controller.CancelVideoTask)
+		videoCancelRouter.DELETE("/videos/generations/:task_id", controller.CancelVideoTask)
+		videoCancelRouter.POST("/videos/generations/:task_id/cancel", controller.CancelVideoTask)
+		videoCancelRouter.DELETE("/video/generations/:task_id", controller.CancelVideoTask)
+		videoCancelRouter.POST("/video/generations/:task_id/cancel", controller.CancelVideoTask)
 	}
 
 	klingV1Router := router.Group("/kling/v1")

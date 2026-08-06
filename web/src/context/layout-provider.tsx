@@ -16,21 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext } from 'react'
 
-import { getCookie, setCookie } from '@/lib/cookies'
+import {
+  DEFAULT_GLOBAL_THEME_SETTINGS,
+  type GlobalLayoutCollapsible,
+  type GlobalLayoutVariant,
+} from '@/lib/theme-customization'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
-export type Collapsible = 'offcanvas' | 'icon' | 'none'
-export type Variant = 'inset' | 'sidebar' | 'floating'
-
-// Cookie constants following the pattern from sidebar.tsx
-const LAYOUT_COLLAPSIBLE_COOKIE_NAME = 'layout_collapsible'
-const LAYOUT_VARIANT_COOKIE_NAME = 'layout_variant'
-const LAYOUT_COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
-
-// Default values
-const DEFAULT_VARIANT = 'inset'
-const DEFAULT_COLLAPSIBLE = 'icon'
+export type Collapsible = GlobalLayoutCollapsible
+export type Variant = GlobalLayoutVariant
 
 type LayoutContextType = {
   resetLayout: () => void
@@ -51,41 +47,25 @@ type LayoutProviderProps = {
 }
 
 export function LayoutProvider({ children }: LayoutProviderProps) {
-  const [collapsible, _setCollapsible] = useState<Collapsible>(() => {
-    const saved = getCookie(LAYOUT_COLLAPSIBLE_COOKIE_NAME)
-    return (saved as Collapsible) || DEFAULT_COLLAPSIBLE
-  })
+  const globalTheme =
+    useSystemConfigStore((state) => state.config.globalTheme) ??
+    DEFAULT_GLOBAL_THEME_SETTINGS
+  const collapsible = globalTheme.layoutCollapsible
+  const variant = globalTheme.layoutVariant
 
-  const [variant, _setVariant] = useState<Variant>(() => {
-    const saved = getCookie(LAYOUT_VARIANT_COOKIE_NAME)
-    return (saved as Variant) || DEFAULT_VARIANT
-  })
-
-  const setCollapsible = (newCollapsible: Collapsible) => {
-    _setCollapsible(newCollapsible)
-    setCookie(
-      LAYOUT_COLLAPSIBLE_COOKIE_NAME,
-      newCollapsible,
-      LAYOUT_COOKIE_MAX_AGE
-    )
-  }
-
-  const setVariant = (newVariant: Variant) => {
-    _setVariant(newVariant)
-    setCookie(LAYOUT_VARIANT_COOKIE_NAME, newVariant, LAYOUT_COOKIE_MAX_AGE)
-  }
-
-  const resetLayout = () => {
-    setCollapsible(DEFAULT_COLLAPSIBLE)
-    setVariant(DEFAULT_VARIANT)
-  }
+  // Layout is administrator-managed along with the color theme. Keep the
+  // context methods for existing consumers, but prevent local cookie/state
+  // mutations from diverging between users.
+  const setCollapsible = (_newCollapsible: Collapsible) => {}
+  const setVariant = (_newVariant: Variant) => {}
+  const resetLayout = () => {}
 
   const contextValue: LayoutContextType = {
     resetLayout,
-    defaultCollapsible: DEFAULT_COLLAPSIBLE,
+    defaultCollapsible: DEFAULT_GLOBAL_THEME_SETTINGS.layoutCollapsible,
     collapsible,
     setCollapsible,
-    defaultVariant: DEFAULT_VARIANT,
+    defaultVariant: DEFAULT_GLOBAL_THEME_SETTINGS.layoutVariant,
     variant,
     setVariant,
   }

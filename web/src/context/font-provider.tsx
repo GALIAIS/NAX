@@ -16,15 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect } from 'react'
 
 import { fonts } from '@/config/fonts'
-import { getCookie, setCookie, removeCookie } from '@/lib/cookies'
 
 type Font = (typeof fonts)[number]
-
-const FONT_COOKIE_NAME = 'font'
-const FONT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365 // 1 year
 
 type FontContextType = {
   font: Font
@@ -35,10 +31,7 @@ type FontContextType = {
 const FontContext = createContext<FontContextType | null>(null)
 
 export function FontProvider({ children }: { children: React.ReactNode }) {
-  const [font, _setFont] = useState<Font>(() => {
-    const savedFont = getCookie(FONT_COOKIE_NAME)
-    return fonts.includes(savedFont as Font) ? (savedFont as Font) : fonts[0]
-  })
+  const font = fonts[0]
 
   useEffect(() => {
     const applyFont = (font: string) => {
@@ -52,15 +45,11 @@ export function FontProvider({ children }: { children: React.ReactNode }) {
     applyFont(font)
   }, [font])
 
-  const setFont = (font: Font) => {
-    setCookie(FONT_COOKIE_NAME, font, FONT_COOKIE_MAX_AGE)
-    _setFont(font)
-  }
-
-  const resetFont = () => {
-    removeCookie(FONT_COOKIE_NAME)
-    _setFont(fonts[0])
-  }
+  // Typography is supplied by ThemeCustomizationProvider from the global
+  // administrator option. Keep this legacy context source-compatible, but do
+  // not read or write a per-user font cookie.
+  const setFont = (_nextFont: Font) => {}
+  const resetFont = () => {}
 
   return (
     <FontContext value={{ font, setFont, resetFont }}>{children}</FontContext>

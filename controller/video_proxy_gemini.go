@@ -17,7 +17,7 @@ func getGeminiVideoURL(channel *model.Channel, task *model.Task, apiKey string) 
 		return "", fmt.Errorf("invalid channel or task")
 	}
 
-	if url := extractGeminiVideoURLFromTaskData(task); url != "" {
+	if url := extractGeminiVideoURLFromTaskData(task); url != "" && !isTaskProxyContentURL(url, task.TaskID) {
 		return ensureAPIKey(url, apiKey), nil
 	}
 

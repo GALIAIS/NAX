@@ -333,6 +333,7 @@ export type BillingSettings = {
 }
 
 export type OperationsSettings = {
+  'theme.global': string
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean

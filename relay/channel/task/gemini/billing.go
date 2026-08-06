@@ -1,11 +1,33 @@
 package gemini
 
 import (
+	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
+	taskdto "github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
+
+// MaxVeoSampleCount is the largest response_count/sampleCount accepted by
+// the public Veo APIs. The gateway's generic video limit is intentionally
+// wider for providers that support larger batches, so Veo validates its own
+// published bound before charging or submitting the request.
+const MaxVeoSampleCount = 4
+
+func ValidateVeoRequest(req relaycommon.TaskSubmitReq) *taskdto.TaskError {
+	count := req.RequestedOutputCount()
+	if count > MaxVeoSampleCount {
+		return &taskdto.TaskError{
+			Code:       "invalid_n",
+			Message:    fmt.Sprintf("Veo sampleCount must be between 1 and %d", MaxVeoSampleCount),
+			StatusCode: http.StatusBadRequest,
+			LocalError: true,
+		}
+	}
+	return nil
+}
 
 // ParseVeoDurationSeconds extracts durationSeconds from metadata.
 // Returns 8 (Veo default) when not specified or invalid.

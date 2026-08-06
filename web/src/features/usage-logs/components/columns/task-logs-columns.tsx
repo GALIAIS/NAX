@@ -25,7 +25,7 @@ import { useTranslation } from 'react-i18next'
 import { StatusBadge } from '@/components/status-badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
-import { formatTimestampToDate } from '@/lib/format'
+import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { TASK_ACTIONS, TASK_STATUS } from '../../constants'
@@ -196,6 +196,57 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
       headerLabel: t('Duration'),
       warningThresholdSec: 300,
     }),
+    {
+      id: 'video_timing',
+      header: t('Timing'),
+      accessorFn: (row) => row.timing?.total_seconds ?? 0,
+      cell: ({ row }) => {
+        const timing = row.original.timing
+        if (!timing) {
+          return <span className='text-muted-foreground/60 text-xs'>-</span>
+        }
+        const total = timing.total_seconds ?? 0
+        const queue = timing.queue_seconds ?? 0
+        const processing = timing.processing_seconds ?? 0
+        return (
+          <div
+            className='flex min-w-[110px] flex-col gap-0.5 font-mono text-xs tabular-nums'
+            title={`${t('Queue')}: ${queue.toFixed(1)}s · ${t('Processing')}: ${processing.toFixed(1)}s`}
+          >
+            <span>{total.toFixed(1)}s</span>
+            <span className='text-muted-foreground/70 text-[10px]'>
+              Q {queue.toFixed(1)}s · P {processing.toFixed(1)}s
+            </span>
+          </div>
+        )
+      },
+    },
+    {
+      id: 'billing',
+      header: t('Billing'),
+      accessorFn: (row) => row.billing?.actual_quota ?? row.quota ?? 0,
+      cell: ({ row }) => {
+        const billing = row.original.billing
+        const actual = billing?.actual_quota ?? 0
+        const pre = billing?.pre_consumed_quota ?? 0
+        if (!billing && !row.original.quota) {
+          return <span className='text-muted-foreground/60 text-xs'>-</span>
+        }
+        return (
+          <div
+            className='flex min-w-[105px] flex-col gap-0.5 text-xs tabular-nums'
+            title={`${t('Pre-Consumed Quota')}: ${formatLogQuota(pre)}`}
+          >
+            <span className='font-mono'>{formatLogQuota(actual)}</span>
+            <span className='text-muted-foreground/70 text-[10px]'>
+              {billing?.mode === 'per_call'
+                ? t('Per Request')
+                : t('Token-based')}
+            </span>
+          </div>
+        )
+      },
+    },
     {
       accessorKey: 'status',
       header: t('Status'),

@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	videodto "github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 type TaskStatus string
@@ -17,16 +20,16 @@ type TaskStatus string
 func (t TaskStatus) ToVideoStatus() string {
 	var status string
 	switch t {
-	case TaskStatusQueued, TaskStatusSubmitted:
-		status = dto.VideoStatusQueued
+	case TaskStatusNotStart, TaskStatusQueued, TaskStatusSubmitted:
+		status = videodto.VideoStatusQueued
 	case TaskStatusInProgress:
-		status = dto.VideoStatusInProgress
+		status = videodto.VideoStatusInProgress
 	case TaskStatusSuccess:
-		status = dto.VideoStatusCompleted
+		status = videodto.VideoStatusCompleted
 	case TaskStatusFailure:
-		status = dto.VideoStatusFailed
+		status = videodto.VideoStatusFailed
 	default:
-		status = dto.VideoStatusUnknown // Default fallback
+		status = videodto.VideoStatusUnknown // Default fallback
 	}
 	return status
 }
@@ -104,22 +107,30 @@ type TaskPrivateData struct {
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	// InlineResult stores a provider-produced data: URI that cannot be
+	// represented as a remote ResultURL (for example Vertex/Gemini may return
+	// bytesBase64Encoded instead of a downloadable object). It is private and
+	// is only consumed by the authenticated /content endpoint.
+	InlineResult string `json:"inline_result,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
 	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	Timing         *taskdto.TaskTiming `json:"timing,omitempty"`          // 任务生命周期与实际生成时长
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	ModelPrice       float64            `json:"model_price,omitempty"`        // 模型单价
+	GroupRatio       float64            `json:"group_ratio,omitempty"`        // 分组倍率
+	ModelRatio       float64            `json:"model_ratio,omitempty"`        // 模型倍率
+	OtherRatios      map[string]float64 `json:"other_ratios,omitempty"`       // 附加倍率（时长、分辨率等）
+	OriginModelName  string             `json:"origin_model_name,omitempty"`  // 模型名称，必须为OriginModelName
+	PerCallBilling   bool               `json:"per_call_billing,omitempty"`   // 按次计费：跳过轮询阶段的差额结算
+	PreConsumedQuota int                `json:"pre_consumed_quota,omitempty"` // 提交时预扣额度
+	Settled          bool               `json:"settled,omitempty"`            // 终态计费已完成
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -370,13 +381,15 @@ func (Task *Task) Insert() error {
 }
 
 type taskSnapshot struct {
-	Status     TaskStatus
-	Progress   string
-	StartTime  int64
-	FinishTime int64
-	FailReason string
-	ResultURL  string
-	Data       json.RawMessage
+	Status       TaskStatus
+	Progress     string
+	StartTime    int64
+	FinishTime   int64
+	FailReason   string
+	ResultURL    string
+	InlineResult string
+	Data         json.RawMessage
+	Timing       *taskdto.TaskTiming
 }
 
 func (s taskSnapshot) Equal(other taskSnapshot) bool {
@@ -386,19 +399,30 @@ func (s taskSnapshot) Equal(other taskSnapshot) bool {
 		s.FinishTime == other.FinishTime &&
 		s.FailReason == other.FailReason &&
 		s.ResultURL == other.ResultURL &&
-		bytes.Equal(s.Data, other.Data)
+		bytes.Equal(s.Data, other.Data) &&
+		reflect.DeepEqual(s.Timing, other.Timing)
 }
 
 func (t *Task) Snapshot() taskSnapshot {
 	return taskSnapshot{
-		Status:     t.Status,
-		Progress:   t.Progress,
-		StartTime:  t.StartTime,
-		FinishTime: t.FinishTime,
-		FailReason: t.FailReason,
-		ResultURL:  t.PrivateData.ResultURL,
-		Data:       t.Data,
+		Status:       t.Status,
+		Progress:     t.Progress,
+		StartTime:    t.StartTime,
+		FinishTime:   t.FinishTime,
+		FailReason:   t.FailReason,
+		ResultURL:    t.PrivateData.ResultURL,
+		InlineResult: t.PrivateData.InlineResult,
+		Data:         t.Data,
+		Timing:       cloneTaskTiming(t.PrivateData.Timing),
 	}
+}
+
+func cloneTaskTiming(timing *taskdto.TaskTiming) *taskdto.TaskTiming {
+	if timing == nil {
+		return nil
+	}
+	clone := *timing
+	return &clone
 }
 
 func (Task *Task) Update() error {
@@ -507,14 +531,36 @@ func TaskCountAllUserTask(userId int, queryParams SyncTaskQueryParams) int64 {
 	_ = query.Count(&total).Error
 	return total
 }
-func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
-	openAIVideo := dto.NewOpenAIVideo()
+func (t *Task) ToOpenAIVideo() *videodto.OpenAIVideo {
+	openAIVideo := videodto.NewOpenAIVideo()
 	openAIVideo.ID = t.TaskID
+	openAIVideo.TaskID = t.TaskID
 	openAIVideo.Status = t.Status.ToVideoStatus()
 	openAIVideo.Model = t.Properties.OriginModelName
 	openAIVideo.SetProgressStr(t.Progress)
 	openAIVideo.CreatedAt = t.CreatedAt
-	openAIVideo.CompletedAt = t.UpdatedAt
-	openAIVideo.SetMetadata("url", t.GetResultURL())
+	if t.Status == TaskStatusSuccess || t.Status == TaskStatusFailure {
+		if t.FinishTime > 0 {
+			openAIVideo.CompletedAt = t.FinishTime
+		} else {
+			openAIVideo.CompletedAt = t.UpdatedAt
+		}
+	}
+	if resultURL := t.GetResultURL(); resultURL != "" {
+		openAIVideo.SetMetadata("url", resultURL)
+	}
+	if t.Status == TaskStatusFailure && t.FailReason != "" {
+		openAIVideo.Error = &videodto.OpenAIVideoError{Message: t.FailReason, Code: "upstream_error"}
+	}
+	if timing := t.PrivateData.Timing; timing != nil {
+		openAIVideo.SetMetadata("timing", timing)
+		seconds := timing.ActualDurationSeconds
+		if seconds <= 0 {
+			seconds = timing.RequestedDurationSeconds
+		}
+		if seconds > 0 {
+			openAIVideo.Seconds = strconv.FormatFloat(seconds, 'f', -1, 64)
+		}
+	}
 	return openAIVideo
 }
