@@ -141,6 +141,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			return nil, fmt.Errorf("decode video request failed: %w", err)
 		}
 		if a.useCustomRoute {
+			// group is a New API playground routing selector. It is consumed by
+			// Distribute before the task adaptor runs and is not part of any
+			// upstream video-generation contract. Forwarding it breaks strict
+			// providers such as Grok2API, whose JSON decoder rejects unknown
+			// fields.
+			delete(input, "group")
 			input["model"] = info.UpstreamModelName
 			encoded, err := common.Marshal(input)
 			if err != nil {
@@ -245,7 +251,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// fields above remain normalized and cannot be overridden by this pass.
 	for key, value := range input {
 		switch key {
-		case "model", "prompt", "duration", "seconds", "size", "resolution", "aspect_ratio", "quality", "fps", "n", "seed", "image", "images", "input_reference", "reference_images", "first_frame_image", "last_frame_image":
+		case "model", "group", "prompt", "duration", "seconds", "size", "resolution", "aspect_ratio", "quality", "fps", "n", "seed", "image", "images", "input_reference", "reference_images", "first_frame_image", "last_frame_image":
 			continue
 		}
 		if value != nil {

@@ -46,10 +46,10 @@ describe('buildVideoGenerationRequest', () => {
       resolution: '1080p',
       image: { url: 'data:image/png;base64,AAAA' },
       reference_images: [{ url: 'https://example.test/second.png' }],
-      n: 1,
     })
     assert.equal('size' in request, false)
     assert.equal('seconds' in request, false)
     assert.equal('quality' in request, false)
+    assert.equal('n' in request, false)
   })
 })

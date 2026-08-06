@@ -32,6 +32,7 @@ func TestBuildRequestBodyNormalizesOfficialGrokVideoControls(t *testing.T) {
 	}
 	context := newJSONContext(t, `{
 		"model":"grok-imagine-video",
+		"group":"default",
 		"prompt":"waves rolling onto a beach",
 		"duration":10,
 		"aspect_ratio":"9:16",
@@ -52,9 +53,10 @@ func TestBuildRequestBodyNormalizesOfficialGrokVideoControls(t *testing.T) {
 	require.Equal(t, "1080p", payload["resolution"])
 	require.Equal(t, map[string]any{"url": "data:image/png;base64,AAAA"}, payload["image"])
 	require.Equal(t, []any{map[string]any{"url": "https://example.test/second.png"}}, payload["reference_images"])
+	require.NotContains(t, payload, "group")
 }
 
-func TestAdvancedCustomBuildRequestBodyPreservesOfficialImageObjects(t *testing.T) {
+func TestAdvancedCustomBuildRequestBodyPreservesOfficialImageObjectsAndRemovesRoutingGroup(t *testing.T) {
 	adaptor := &TaskAdaptor{}
 	info := &common.RelayInfo{
 		ChannelMeta: &common.ChannelMeta{
@@ -72,6 +74,7 @@ func TestAdvancedCustomBuildRequestBodyPreservesOfficialImageObjects(t *testing.
 	adaptor.Init(info)
 	context := newJSONContext(t, `{
 		"model":"grok-imagine-video",
+		"group":"default",
 		"prompt":"a city at night",
 		"image":{"url":"data:image/png;base64,AAAA"},
 		"reference_images":[{"url":"https://example.test/second.png"}]
@@ -86,6 +89,7 @@ func TestAdvancedCustomBuildRequestBodyPreservesOfficialImageObjects(t *testing.
 	require.NoError(t, rootcommon.Unmarshal(encoded, &payload))
 	require.Equal(t, map[string]any{"url": "data:image/png;base64,AAAA"}, payload["image"])
 	require.Equal(t, []any{map[string]any{"url": "https://example.test/second.png"}}, payload["reference_images"])
+	require.NotContains(t, payload, "group")
 }
 
 func TestAdvancedCustomVideoRouteBuildsURLAndFetchPath(t *testing.T) {

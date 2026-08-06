@@ -41,6 +41,5 @@ export function buildVideoGenerationRequest(
       normalizedReferences.length > 1
         ? normalizedReferences.slice(1).map((url) => ({ url }))
         : undefined,
-    n: 1,
   }
 }
