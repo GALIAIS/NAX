@@ -4,6 +4,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -50,4 +53,44 @@ func TestResolveVideoURL(t *testing.T) {
 		"https://signed.example/video.mp4?token=abc",
 		resolveVideoURL("https://provider.example", "https://signed.example/video.mp4?token=abc"),
 	)
+}
+
+func TestResolveAdvancedCustomVideoContentTargetUsesChannelBase(t *testing.T) {
+	baseURL := "http://grok2api:8000"
+	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom, BaseURL: &baseURL}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/videos/generations",
+			UpstreamPath: "/v1/videos/generations",
+			Models:       []string{"grok-imagine-video"},
+		}}},
+	})
+	task := &model.Task{
+		Properties:  model.Properties{OriginModelName: "grok-imagine-video"},
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: "video_demo"},
+	}
+
+	target, trusted := resolveAdvancedCustomVideoContentTarget(
+		channel,
+		task,
+		"https://public.example/v1/videos/video_demo/content",
+	)
+
+	require.True(t, trusted)
+	require.Equal(t, "http://grok2api:8000/v1/videos/video_demo/content", target)
+}
+
+func TestResolveAdvancedCustomVideoContentTargetKeepsCDNURL(t *testing.T) {
+	baseURL := "http://grok2api:8000"
+	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom, BaseURL: &baseURL}
+	task := &model.Task{PrivateData: model.TaskPrivateData{UpstreamTaskID: "video_demo"}}
+
+	target, trusted := resolveAdvancedCustomVideoContentTarget(
+		channel,
+		task,
+		"https://cdn.example/video.mp4",
+	)
+
+	require.False(t, trusted)
+	require.Equal(t, "https://cdn.example/video.mp4", target)
 }

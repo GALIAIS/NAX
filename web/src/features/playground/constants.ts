@@ -61,6 +61,8 @@ export const DEFAULT_CONFIG: PlaygroundConfig = {
   image_quality: 'auto',
   image_n: 1,
   image_response_format: 'url',
+  image_aspect_ratio: '1:1',
+  image_resolution: '1k',
   video_size: '1280x720',
   video_seconds: 5,
   video_quality: 'standard',

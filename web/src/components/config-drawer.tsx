@@ -88,18 +88,18 @@ export function ConfigDrawer() {
           <SheetTitle>{t('Theme Settings')}</SheetTitle>
           <SheetDescription id='config-drawer-description'>
             {t(
-              'The administrator controls the appearance and layout for all users.'
+              'Choose light, dark, or system mode. The administrator controls the shared theme and layout.'
             )}
           </SheetDescription>
         </SheetHeader>
         <div className={sideDrawerFormClassName()}>
           <GlobalThemeSummary />
+          <ThemeConfig />
           <fieldset
             disabled
             aria-disabled='true'
             className='space-y-6 opacity-60'
           >
-            <ThemeConfig />
             <PresetConfig />
             <FontConfig />
             <RadiusConfig />
@@ -124,12 +124,12 @@ function GlobalThemeSummary() {
       <p className='text-sm font-medium'>{t('Administrator-managed theme')}</p>
       <p className='text-muted-foreground text-xs leading-relaxed'>
         {t(
-          'The administrator controls the theme globally. Local appearance controls are disabled so every user sees the same interface.'
+          'The administrator controls the color preset, typography, spacing, and layout globally. You can still choose light, dark, or system mode.'
         )}
       </p>
       {globalTheme ? (
         <p className='text-muted-foreground font-mono text-[11px]'>
-          {globalTheme.theme} · {globalTheme.preset} · {globalTheme.font}
+          {globalTheme.preset} · {globalTheme.font} · {globalTheme.scale}
         </p>
       ) : null}
     </div>

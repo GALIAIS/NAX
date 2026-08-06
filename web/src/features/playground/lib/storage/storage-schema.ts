@@ -39,6 +39,8 @@ export const playgroundConfigSchema = z.object({
   image_quality: z.enum(['auto', 'standard', 'hd']).optional(),
   image_n: z.number().optional(),
   image_response_format: z.enum(['url', 'b64_json']).optional(),
+  image_aspect_ratio: z.string().optional(),
+  image_resolution: z.string().optional(),
   video_size: z.string().optional(),
   video_seconds: z.number().optional(),
   video_quality: z.string().optional(),
@@ -86,6 +88,7 @@ const reasoningSchema = z.object({
 const mediaSchema = z.object({
   kind: z.enum(['image', 'video']),
   url: z.string(),
+  taskId: z.string().optional(),
   alt: z.string().optional(),
   mimeType: z.string().optional(),
 })

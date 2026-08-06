@@ -28,6 +28,7 @@ export type PlaygroundMode = 'chat' | 'image' | 'video'
 export type PlaygroundMedia = {
   kind: 'image' | 'video'
   url: string
+  taskId?: string
   alt?: string
   mimeType?: string
 }
@@ -147,6 +148,8 @@ export interface PlaygroundConfig {
   image_quality: 'auto' | 'standard' | 'hd'
   image_n: number
   image_response_format: 'url' | 'b64_json'
+  image_aspect_ratio: string
+  image_resolution: string
   video_size: string
   video_seconds: number
   video_quality: string
@@ -186,6 +189,9 @@ export interface ImageGenerationRequest {
   size?: string
   quality?: string
   response_format?: 'url' | 'b64_json'
+  aspect_ratio?: string
+  resolution?: string
+  stream?: boolean
 }
 
 export interface ImageGenerationResponse {

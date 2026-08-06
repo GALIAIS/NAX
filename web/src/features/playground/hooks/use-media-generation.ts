@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,7 +24,6 @@ import {
   cancelVideo,
   createVideo,
   generateImages,
-  getVideoContent,
   getVideoStatus,
 } from '../api'
 import {
@@ -34,6 +33,7 @@ import {
   updateLastAssistantMessage,
   updateCurrentVersionContent,
 } from '../lib'
+import { buildImageGenerationRequest } from '../lib/media/image-request-utils'
 import { buildVideoGenerationRequest } from '../lib/media/video-request-utils'
 import type { Message, PlaygroundConfig, PlaygroundMedia } from '../types'
 
@@ -93,10 +93,6 @@ function getVideoReferenceURLs(messages: Message[]): string[] {
       .filter(Boolean)
   }
   return []
-}
-
-function isExternalMediaURL(value: string): boolean {
-  return /^(?:https?:|data:|blob:)/i.test(value)
 }
 
 function getVideoState(
@@ -170,7 +166,9 @@ export function useMediaGeneration({
   const setMediaMessage = useCallback(
     (generation: number, media: PlaygroundMedia[]) => {
       onMessageUpdate((previousMessages) => {
-        if (requestGenerationRef.current !== generation) return previousMessages
+        if (requestGenerationRef.current !== generation) {
+          return previousMessages
+        }
         return updateLastAssistantMessage(previousMessages, (message) =>
           completeAssistantTiming({
             ...updateCurrentVersionContent(message, ''),
@@ -192,7 +190,9 @@ export function useMediaGeneration({
       const { errorCode, errorMessage } = parseRequestErrorDetails(error)
       toast.error(errorMessage)
       onMessageUpdate((previousMessages) => {
-        if (requestGenerationRef.current !== generation) return previousMessages
+        if (requestGenerationRef.current !== generation) {
+          return previousMessages
+        }
         return updateAssistantMessageWithError(
           previousMessages,
           errorMessage,
@@ -205,26 +205,12 @@ export function useMediaGeneration({
   )
 
   const pollVideo = useCallback(
-    async (taskId: string, signal: AbortSignal): Promise<string> => {
+    async (taskId: string, signal: AbortSignal): Promise<void> => {
       for (let attempt = 0; attempt < VIDEO_POLL_LIMIT; attempt += 1) {
         const status = await getVideoStatus(taskId, signal)
         const state = getVideoState(status.status)
         if (state === 'complete') {
-          const returnedURL = [
-            status.url,
-            status.video_url,
-            status.content_url,
-            status.output_url,
-            status.metadata?.url,
-            status.metadata?.video_url,
-            status.metadata?.content_url,
-          ]
-            .map((value) => value?.trim())
-            .find(Boolean)
-          if (returnedURL && isExternalMediaURL(returnedURL)) {
-            return returnedURL
-          }
-          return getVideoContent(taskId, signal)
+          return
         }
         if (state === 'failed') {
           throw new Error(status.error?.message || t('Video generation failed'))
@@ -259,15 +245,7 @@ export function useMediaGeneration({
       try {
         if (config.mode === 'image') {
           const response = await generateImages(
-            {
-              model: config.model,
-              group: config.group,
-              prompt,
-              n: Math.min(10, Math.max(1, Math.round(config.image_n))),
-              size: config.image_size,
-              quality: config.image_quality,
-              response_format: config.image_response_format,
-            },
+            buildImageGenerationRequest(config, prompt),
             abortController.signal
           )
           const media = (response.data || [])
@@ -286,8 +264,14 @@ export function useMediaGeneration({
           const taskId = getTaskID(response)
           if (!taskId) throw new Error(t('Video endpoint returned no task id'))
           activeVideoTaskRef.current = taskId
-          const url = await pollVideo(taskId, abortController.signal)
-          setMediaMessage(generation, [{ kind: 'video', url }])
+          await pollVideo(taskId, abortController.signal)
+          setMediaMessage(generation, [
+            {
+              kind: 'video',
+              taskId,
+              url: `/pg/videos/${encodeURIComponent(taskId)}/content`,
+            },
+          ])
         }
       } catch (error: unknown) {
         if (!abortController.signal.aborted) {

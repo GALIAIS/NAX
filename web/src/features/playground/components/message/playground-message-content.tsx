@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -38,8 +38,10 @@ import {
   SourcesContent,
   SourcesTrigger,
 } from '@/components/ai-elements/sources'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
+import { getVideoContent } from '../../api'
 import { MESSAGE_STATUS } from '../../constants'
 import {
   getMessageAlignmentClass,
@@ -48,7 +50,7 @@ import {
   type MessageAlignment,
 } from '../../lib'
 import { getMessageContentStyles } from '../../lib/message/message-styles'
-import type { Message } from '../../types'
+import type { Message, PlaygroundMedia } from '../../types'
 import { MessageError } from './message-error'
 import { MessageMetadata } from './message-metadata'
 
@@ -212,15 +214,10 @@ export function PlaygroundMessageContent({
                     </span>
                   </a>
                 ) : (
-                  <video
-                    className='bg-muted/20 max-h-[min(60vh,32rem)] w-full rounded-xl border object-contain'
-                    controls
-                    key={media.url}
-                    preload='metadata'
-                    src={media.url}
-                  >
-                    {t('Your browser does not support video playback.')}
-                  </video>
+                  <AuthenticatedVideo
+                    key={media.taskId || media.url}
+                    media={media}
+                  />
                 )
               )}
             </div>
@@ -231,5 +228,90 @@ export function PlaygroundMessageContent({
         </>
       )}
     </div>
+  )
+}
+
+function AuthenticatedVideo({ media }: { media: PlaygroundMedia }) {
+  const { t } = useTranslation()
+  const [playbackURL, setPlaybackURL] = useState(() =>
+    media.taskId ? '' : media.url
+  )
+  const [error, setError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
+
+  useEffect(() => {
+    if (!media.taskId) {
+      setPlaybackURL(media.url)
+      setError('')
+      return
+    }
+
+    const controller = new AbortController()
+    let objectURL = ''
+    setPlaybackURL('')
+    setError('')
+
+    void getVideoContent(media.taskId, controller.signal)
+      .then((url) => {
+        if (controller.signal.aborted) {
+          URL.revokeObjectURL(url)
+          return
+        }
+        objectURL = url
+        setPlaybackURL(url)
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return
+        setError(cause instanceof Error ? cause.message : t('Request failed'))
+      })
+
+    return () => {
+      controller.abort()
+      if (objectURL) URL.revokeObjectURL(objectURL)
+    }
+  }, [media.taskId, media.url, retryKey, t])
+
+  if (error) {
+    return (
+      <div className='bg-muted/20 border-border/70 flex min-h-36 flex-col items-center justify-center gap-3 rounded-xl border p-4 text-center'>
+        <div>
+          <p className='text-sm font-medium'>{t('Video playback failed')}</p>
+          <p className='text-muted-foreground mt-1 line-clamp-2 text-xs'>
+            {error}
+          </p>
+        </div>
+        <Button
+          onClick={() => setRetryKey((value) => value + 1)}
+          size='sm'
+          type='button'
+          variant='outline'
+        >
+          {t('Retry')}
+        </Button>
+      </div>
+    )
+  }
+
+  if (!playbackURL) {
+    return (
+      <div className='bg-muted/20 border-border/70 flex min-h-36 items-center justify-center gap-2 rounded-xl border'>
+        <Loader />
+        <Shimmer className='text-sm' duration={1}>
+          {t('Loading video...')}
+        </Shimmer>
+      </div>
+    )
+  }
+
+  return (
+    <video
+      className='bg-muted/20 max-h-[min(60vh,32rem)] w-full rounded-xl border object-contain'
+      controls
+      playsInline
+      preload='metadata'
+      src={playbackURL}
+    >
+      {t('Your browser does not support video playback.')}
+    </video>
   )
 }

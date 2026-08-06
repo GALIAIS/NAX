@@ -25,12 +25,16 @@ import {
   useState,
 } from 'react'
 
+import { getCookie, removeCookie, setCookie } from '@/lib/cookies'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 type Theme = 'dark' | 'light' | 'system'
 type ResolvedTheme = Exclude<Theme, 'system'>
 
 const DEFAULT_THEME = 'system'
+const THEME_COOKIE_NAME = 'vite-ui-theme'
+const THEME_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+const THEMES = new Set<Theme>(['dark', 'light', 'system'])
 
 type ThemeProviderProps = {
   children: React.ReactNode
@@ -67,17 +71,33 @@ function resolveTheme(theme: Theme): ResolvedTheme {
   return theme === 'system' ? getSystemTheme() : theme
 }
 
+function getStoredTheme(storageKey: string, fallback: Theme): Theme {
+  const storedTheme = getCookie(storageKey) as Theme | undefined
+  return storedTheme && THEMES.has(storedTheme) ? storedTheme : fallback
+}
+
 export function ThemeProvider({
   children,
   defaultTheme = DEFAULT_THEME,
+  storageKey = THEME_COOKIE_NAME,
 }: ThemeProviderProps) {
-  const globalTheme = useSystemConfigStore(
+  const administratorDefault = useSystemConfigStore(
     (state) => state.config.globalTheme?.theme
   )
-  const theme = globalTheme ?? defaultTheme
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
-    resolveTheme(theme)
+  const effectiveDefaultTheme = administratorDefault ?? defaultTheme
+  const [theme, updateTheme] = useState<Theme>(() =>
+    getStoredTheme(storageKey, effectiveDefaultTheme)
   )
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    resolveTheme(getStoredTheme(storageKey, effectiveDefaultTheme))
+  )
+
+  useEffect(() => {
+    const storedTheme = getCookie(storageKey) as Theme | undefined
+    if (!storedTheme || !THEMES.has(storedTheme)) {
+      updateTheme(effectiveDefaultTheme)
+    }
+  }, [effectiveDefaultTheme, storageKey])
 
   useEffect(() => {
     const root = window.document.documentElement
@@ -97,21 +117,28 @@ export function ThemeProvider({
     return () => mediaQuery.removeEventListener('change', applyTheme)
   }, [theme])
 
-  // Theme is administrator-managed. Keep the context API for existing
-  // consumers, but deliberately make client-side changes no-ops.
-  const setTheme = useCallback((_nextTheme: Theme) => {}, [])
+  const setTheme = useCallback(
+    (nextTheme: Theme) => {
+      setCookie(storageKey, nextTheme, THEME_COOKIE_MAX_AGE)
+      updateTheme(nextTheme)
+    },
+    [storageKey]
+  )
 
-  const resetTheme = useCallback(() => {}, [])
+  const resetTheme = useCallback(() => {
+    removeCookie(storageKey)
+    updateTheme(effectiveDefaultTheme)
+  }, [effectiveDefaultTheme, storageKey])
 
   const contextValue = useMemo(
     () => ({
-      defaultTheme,
+      defaultTheme: effectiveDefaultTheme,
       resolvedTheme,
       resetTheme,
       theme,
       setTheme,
     }),
-    [defaultTheme, resolvedTheme, resetTheme, theme, setTheme]
+    [effectiveDefaultTheme, resolvedTheme, resetTheme, theme, setTheme]
   )
 
   return <ThemeContext value={contextValue}>{children}</ThemeContext>

@@ -69,6 +69,7 @@ func VideoProxy(c *gin.Context) {
 	}
 
 	var videoURL string
+	trustedChannelTarget := false
 	proxy := channel.GetSetting().Proxy
 	client := service.GetSSRFProtectedHTTPClient()
 	if proxy != "" {
@@ -139,6 +140,7 @@ func VideoProxy(c *gin.Context) {
 		// when the provider requires a header/query key; signed media URLs can
 		// remain unauthenticated.
 		videoURL = task.GetResultURL()
+		videoURL, trustedChannelTarget = resolveAdvancedCustomVideoContentTarget(channel, task, videoURL)
 		videoURL = applyAdvancedCustomVideoAuth(channel, task, req, videoURL)
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
@@ -169,7 +171,18 @@ func VideoProxy(c *gin.Context) {
 	}
 
 	var validateErr error
-	if proxy == "" {
+	if trustedChannelTarget {
+		// This target is derived exclusively from the administrator-configured
+		// channel base URL and the task's stored upstream ID. It follows the same
+		// trust boundary as ordinary channel relay requests and may legitimately
+		// point at an internal service name in a Compose network.
+		client, err = service.GetHttpClientWithProxy(proxy)
+		if err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to create channel client for task %s: %s", taskID, err.Error()))
+			videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to create proxy client")
+			return
+		}
+	} else if proxy == "" {
 		validateErr = service.ValidateSSRFProtectedFetchURL(videoURL)
 	} else {
 		fetchSetting := system_setting.GetFetchSetting()
@@ -233,6 +246,69 @@ func resolveVideoURL(baseURL, videoURL string) string {
 		return videoURL
 	}
 	return base.ResolveReference(parsed).String()
+}
+
+func resolveAdvancedCustomVideoContentTarget(channelModel *model.Channel, task *model.Task, videoURL string) (string, bool) {
+	if channelModel == nil || task == nil {
+		return videoURL, false
+	}
+	upstreamTaskID := strings.TrimSpace(task.GetUpstreamTaskID())
+	if upstreamTaskID == "" {
+		return videoURL, false
+	}
+
+	result, err := url.Parse(strings.TrimSpace(videoURL))
+	if err != nil || result.Path != "/v1/videos/"+upstreamTaskID+"/content" {
+		return videoURL, false
+	}
+
+	config := channelModel.GetOtherSettings().AdvancedCustom
+	if config == nil {
+		return videoURL, false
+	}
+	modelName := task.Properties.OriginModelName
+	var route dto.AdvancedCustomRoute
+	var found bool
+	for _, path := range []string{"/v1/videos", "/v1/videos/generations", "/v1/video/generations"} {
+		if route, found = config.MatchPathForModel(path, modelName); found {
+			break
+		}
+	}
+	if !found {
+		return videoURL, false
+	}
+
+	routeTarget := strings.TrimSpace(route.UpstreamPath)
+	var target *url.URL
+	if strings.HasPrefix(routeTarget, "/") && !strings.HasPrefix(routeTarget, "//") {
+		target, err = url.Parse(strings.TrimSpace(channelModel.GetBaseURL()))
+		if err != nil || target.Scheme == "" || target.Host == "" {
+			return videoURL, false
+		}
+		contentPath := deriveAdvancedCustomVideoContentPath(routeTarget, upstreamTaskID)
+		target.Path = strings.TrimRight(target.Path, "/") + "/" + strings.TrimLeft(contentPath, "/")
+	} else {
+		target, err = url.Parse(routeTarget)
+		if err != nil || target.Scheme == "" || target.Host == "" {
+			return videoURL, false
+		}
+		target.Path = deriveAdvancedCustomVideoContentPath(target.Path, upstreamTaskID)
+	}
+	if !strings.EqualFold(target.Scheme, "http") && !strings.EqualFold(target.Scheme, "https") {
+		return videoURL, false
+	}
+	target.RawPath = ""
+	target.RawQuery = ""
+	target.Fragment = ""
+	return target.String(), true
+}
+
+func deriveAdvancedCustomVideoContentPath(submitPath, taskID string) string {
+	path := strings.TrimRight(strings.TrimSpace(submitPath), "/")
+	if strings.HasSuffix(path, "/generations") {
+		path = strings.TrimSuffix(path, "/generations")
+	}
+	return path + "/" + url.PathEscape(taskID) + "/content"
 }
 
 func applyAdvancedCustomVideoAuth(channelModel *model.Channel, task *model.Task, req *http.Request, videoURL string) string {

@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -54,8 +54,20 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
+import { isGrokImageModel } from '../../lib/media/image-request-utils'
 import type { PlaygroundConfig } from '../../types'
 
+const GROK_IMAGE_COUNTS = ['1', '2', '3', '4'] as const
+const GROK_IMAGE_ASPECT_RATIOS = [
+  '1:1',
+  '16:9',
+  '9:16',
+  '4:3',
+  '3:4',
+  '3:2',
+  '2:3',
+] as const
+const GROK_IMAGE_RESOLUTIONS = ['1k', '2k'] as const
 const GROK_VIDEO_DURATIONS = ['6', '10', '15'] as const
 const GROK_VIDEO_ASPECT_RATIOS = [
   '1:1',
@@ -83,6 +95,7 @@ export function PlaygroundMediaPanel(props: PlaygroundMediaPanelProps) {
   if (props.config.mode === 'chat') return null
 
   const isImage = props.config.mode === 'image'
+  const isGrokImage = isImage && isGrokImageModel(props.config.model)
   const hasVideoReference =
     attachments.files.length > 0 ||
     props.config.video_reference_url.trim().length > 0
@@ -133,49 +146,103 @@ export function PlaygroundMediaPanel(props: PlaygroundMediaPanelProps) {
 
         {isImage ? (
           <div className='grid gap-3'>
-            <MediaSelect
-              label={t('Image size')}
-              value={props.config.image_size}
-              options={['1024x1024', '1536x1024', '1024x1536']}
-              onChange={(value) => props.onConfigChange('image_size', value)}
-            />
-            <MediaSelect
-              label={t('Image quality')}
-              value={props.config.image_quality}
-              options={['auto', 'standard', 'hd']}
-              onChange={(value) =>
-                props.onConfigChange(
-                  'image_quality',
-                  value as PlaygroundConfig['image_quality']
-                )
-              }
-            />
-            <MediaSelect
-              label={t('Image response')}
-              value={props.config.image_response_format}
-              options={['url', 'b64_json']}
-              onChange={(value) =>
-                props.onConfigChange(
-                  'image_response_format',
-                  value as PlaygroundConfig['image_response_format']
-                )
-              }
-            />
-            <label className='grid gap-1 text-xs'>
-              <span className='text-muted-foreground'>{t('Image count')}</span>
-              <Input
-                type='number'
-                min={1}
-                max={10}
-                value={props.config.image_n}
-                onChange={(event) =>
-                  props.onConfigChange(
-                    'image_n',
-                    Math.min(10, Math.max(1, Number(event.target.value) || 1))
-                  )
-                }
-              />
-            </label>
+            {isGrokImage ? (
+              <>
+                <div className='border-border/70 bg-muted/20 rounded-lg border px-3 py-2 text-[11px] leading-4'>
+                  <span className='font-medium'>
+                    {t('Grok image controls')}
+                  </span>
+                  <p className='text-muted-foreground mt-0.5'>
+                    {t(
+                      'Synchronized with the Grok2API creative console. Images use URL responses and non-streaming generation.'
+                    )}
+                  </p>
+                </div>
+                <MediaSelect
+                  icon={<ImagePlusIcon size={12} />}
+                  label={t('Image count')}
+                  value={String(
+                    Math.min(4, Math.max(1, Math.round(props.config.image_n)))
+                  )}
+                  options={[...GROK_IMAGE_COUNTS]}
+                  optionLabel={(value) => `${value}×`}
+                  onChange={(value) =>
+                    props.onConfigChange('image_n', Number(value))
+                  }
+                />
+                <MediaSelect
+                  icon={<RatioIcon size={12} />}
+                  label={t('Image aspect ratio')}
+                  value={props.config.image_aspect_ratio}
+                  options={[...GROK_IMAGE_ASPECT_RATIOS]}
+                  onChange={(value) =>
+                    props.onConfigChange('image_aspect_ratio', value)
+                  }
+                />
+                <MediaSelect
+                  icon={<MonitorUpIcon size={12} />}
+                  label={t('Image resolution')}
+                  value={props.config.image_resolution}
+                  options={[...GROK_IMAGE_RESOLUTIONS]}
+                  onChange={(value) =>
+                    props.onConfigChange('image_resolution', value)
+                  }
+                />
+              </>
+            ) : (
+              <>
+                <MediaSelect
+                  label={t('Image size')}
+                  value={props.config.image_size}
+                  options={['1024x1024', '1536x1024', '1024x1536']}
+                  onChange={(value) =>
+                    props.onConfigChange('image_size', value)
+                  }
+                />
+                <MediaSelect
+                  label={t('Image quality')}
+                  value={props.config.image_quality}
+                  options={['auto', 'standard', 'hd']}
+                  onChange={(value) =>
+                    props.onConfigChange(
+                      'image_quality',
+                      value as PlaygroundConfig['image_quality']
+                    )
+                  }
+                />
+                <MediaSelect
+                  label={t('Image response')}
+                  value={props.config.image_response_format}
+                  options={['url', 'b64_json']}
+                  onChange={(value) =>
+                    props.onConfigChange(
+                      'image_response_format',
+                      value as PlaygroundConfig['image_response_format']
+                    )
+                  }
+                />
+                <label className='grid gap-1 text-xs'>
+                  <span className='text-muted-foreground'>
+                    {t('Image count')}
+                  </span>
+                  <Input
+                    type='number'
+                    min={1}
+                    max={10}
+                    value={props.config.image_n}
+                    onChange={(event) =>
+                      props.onConfigChange(
+                        'image_n',
+                        Math.min(
+                          10,
+                          Math.max(1, Number(event.target.value) || 1)
+                        )
+                      )
+                    }
+                  />
+                </label>
+              </>
+            )}
           </div>
         ) : (
           <div className='grid gap-4'>

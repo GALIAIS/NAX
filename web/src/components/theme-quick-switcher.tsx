@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils'
 
 export function ThemeQuickSwitcher() {
   const { t } = useTranslation()
-  const { theme } = useTheme()
+  const { setTheme, theme } = useTheme()
 
   return (
     <div className='px-2 pt-1.5 pb-1'>
@@ -36,9 +36,6 @@ export function ThemeQuickSwitcher() {
           className='text-muted-foreground text-sm select-none'
         >
           {t('Theme')}
-        </span>
-        <span className='text-muted-foreground text-[11px]'>
-          {t('Managed by administrator')}
         </span>
         <div
           role='radiogroup'
@@ -51,7 +48,7 @@ export function ThemeQuickSwitcher() {
             role='radio'
             aria-label={t('System')}
             aria-checked={theme === 'system'}
-            disabled
+            onClick={() => setTheme('system')}
             className={cn(
               'relative size-7',
               theme === 'system' && 'text-accent-foreground'
@@ -78,7 +75,7 @@ export function ThemeQuickSwitcher() {
             role='radio'
             aria-label={t('Light')}
             aria-checked={theme === 'light'}
-            disabled
+            onClick={() => setTheme('light')}
             className={cn(
               'relative size-7',
               theme === 'light' && 'text-accent-foreground'
@@ -105,7 +102,7 @@ export function ThemeQuickSwitcher() {
             role='radio'
             aria-label={t('Dark')}
             aria-checked={theme === 'dark'}
-            disabled
+            onClick={() => setTheme('dark')}
             className={cn(
               'relative size-7',
               theme === 'dark' && 'text-accent-foreground'

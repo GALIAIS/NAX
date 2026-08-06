@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -192,14 +192,14 @@ export function GlobalThemeSection(props: GlobalThemeSectionProps) {
           </p>
           <p className='text-muted-foreground text-xs'>
             {t(
-              'This appearance is applied globally. Individual users cannot override the theme from their browser.'
+              'The preset, typography, spacing, and layout are applied globally. Users can still choose light, dark, or system mode.'
             )}
           </p>
         </div>
 
         <div className='grid gap-4 sm:grid-cols-2 lg:col-span-2'>
           <ThemeSelect
-            label={t('Color mode')}
+            label={t('Default color mode')}
             value={settings.theme}
             options={MODE_OPTIONS.map((option) => ({
               ...option,
