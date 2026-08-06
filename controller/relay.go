@@ -185,7 +185,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,
 		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
+		RequestPath: common.CanonicalRelayRequestPath(c.Request.URL.Path),
 		Retry:       common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
@@ -484,6 +484,12 @@ func RelayTaskFetch(c *gin.Context) {
 		})
 		return
 	}
+	if relayInfo.RelayMode == relayconstant.RelayModeUnknown {
+		requestPath := common.CanonicalRelayRequestPath(c.Request.URL.Path)
+		if strings.HasPrefix(requestPath, "/v1/videos") || strings.HasPrefix(requestPath, "/v1/video/generations") {
+			relayInfo.RelayMode = relayconstant.RelayModeVideoFetchByID
+		}
+	}
 	if taskErr := relay.RelayTaskFetch(c, relayInfo.RelayMode); taskErr != nil {
 		respondTaskError(c, taskErr)
 	}
@@ -517,7 +523,7 @@ func RelayTask(c *gin.Context) {
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,
 		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
+		RequestPath: common.CanonicalRelayRequestPath(c.Request.URL.Path),
 		Retry:       common.GetPointer(0),
 	}
 

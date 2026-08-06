@@ -81,7 +81,7 @@ func CancelUpstreamVideoTask(task *model.Task) error {
 // 该函数在控制器的重试循环之前调用一次，其结果通过 info 字段和上下文持久化。
 func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
 	// 检测 remix action
-	path := c.Request.URL.Path
+	path := common.CanonicalRelayRequestPath(c.Request.URL.Path)
 	if strings.Contains(path, "/v1/videos/") && strings.HasSuffix(path, "/remix") {
 		info.Action = constant.TaskActionRemix
 	}
@@ -89,6 +89,9 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	// 提取 remix 任务的 video_id
 	if info.Action == constant.TaskActionRemix {
 		videoID := c.Param("video_id")
+		if strings.TrimSpace(videoID) == "" {
+			videoID = c.Param("task_id")
+		}
 		if strings.TrimSpace(videoID) == "" {
 			return service.TaskErrorWrapperLocal(fmt.Errorf("video_id is required"), "invalid_request", http.StatusBadRequest)
 		}
@@ -566,7 +569,9 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		return
 	}
 
-	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
+	canonicalPath := common.CanonicalRelayRequestPath(c.Request.URL.Path)
+	isOpenAIVideoAPI := strings.HasPrefix(canonicalPath, "/v1/videos/") ||
+		strings.HasPrefix(canonicalPath, "/v1/video/generations/")
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
 	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {

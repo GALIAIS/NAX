@@ -8,6 +8,40 @@ import (
 )
 
 func SetVideoRouter(router *gin.Engine) {
+	// Dashboard playground video routes use the same task pipeline as the
+	// public /v1 API, but run through the session-backed playground context so
+	// billing does not try to resolve a missing API token.
+	playgroundVideoSubmitRouter := router.Group("/pg")
+	playgroundVideoSubmitRouter.Use(middleware.RouteTag("relay"))
+	playgroundVideoSubmitRouter.Use(middleware.UserAuth(), middleware.Distribute())
+	{
+		playgroundVideoSubmitRouter.POST("/video/generations", controller.PlaygroundTask)
+		playgroundVideoSubmitRouter.POST("/videos/:task_id/remix", controller.PlaygroundTask)
+		playgroundVideoSubmitRouter.POST("/videos", controller.PlaygroundTask)
+		playgroundVideoSubmitRouter.POST("/videos/generations", controller.PlaygroundTask)
+	}
+
+	playgroundVideoReadRouter := router.Group("/pg")
+	playgroundVideoReadRouter.Use(middleware.RouteTag("relay"), middleware.UserAuth())
+	{
+		playgroundVideoReadRouter.GET("/videos/:task_id/content", controller.VideoProxy)
+		playgroundVideoReadRouter.HEAD("/videos/:task_id/content", controller.VideoProxy)
+		playgroundVideoReadRouter.GET("/video/generations/:task_id", controller.RelayTaskFetch)
+		playgroundVideoReadRouter.GET("/videos/:task_id", controller.RelayTaskFetch)
+		playgroundVideoReadRouter.GET("/videos/generations/:task_id", controller.RelayTaskFetch)
+	}
+
+	playgroundVideoCancelRouter := router.Group("/pg")
+	playgroundVideoCancelRouter.Use(middleware.RouteTag("relay"), middleware.UserAuth())
+	{
+		playgroundVideoCancelRouter.DELETE("/videos/:task_id", controller.CancelVideoTask)
+		playgroundVideoCancelRouter.POST("/videos/:task_id/cancel", controller.CancelVideoTask)
+		playgroundVideoCancelRouter.DELETE("/videos/generations/:task_id", controller.CancelVideoTask)
+		playgroundVideoCancelRouter.POST("/videos/generations/:task_id/cancel", controller.CancelVideoTask)
+		playgroundVideoCancelRouter.DELETE("/video/generations/:task_id", controller.CancelVideoTask)
+		playgroundVideoCancelRouter.POST("/video/generations/:task_id/cancel", controller.CancelVideoTask)
+	}
+
 	// Video proxy: accepts either session auth (dashboard) or token auth (API clients)
 	videoProxyRouter := router.Group("/v1")
 	videoProxyRouter.Use(middleware.RouteTag("relay"))

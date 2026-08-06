@@ -13,44 +13,65 @@ import (
 )
 
 func Playground(c *gin.Context) {
-	var newAPIError *types.NewAPIError
-
-	defer func() {
-		if newAPIError != nil {
-			c.JSON(newAPIError.StatusCode, gin.H{
-				"error": newAPIError.ToOpenAIError(),
-			})
-		}
-	}()
-
-	useAccessToken := c.GetBool("use_access_token")
-	if useAccessToken {
-		newAPIError = types.NewError(errors.New("暂不支持使用 access token"), types.ErrorCodeAccessDenied, types.ErrOptionWithSkipRetry())
+	if newAPIError := preparePlaygroundRelay(c, types.RelayFormatOpenAI); newAPIError != nil {
+		respondPlaygroundError(c, newAPIError)
 		return
 	}
+	Relay(c, types.RelayFormatOpenAI)
+}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAI, nil, nil)
+// PlaygroundImage and PlaygroundTask share the dashboard-only playground
+// context with chat. Keeping these endpoints under /pg is important: relay
+// billing must use the authenticated user wallet/subscription and must not
+// attempt to look up a synthetic API token.
+func PlaygroundImage(c *gin.Context) {
+	if newAPIError := preparePlaygroundRelay(c, types.RelayFormatOpenAIImage); newAPIError != nil {
+		respondPlaygroundError(c, newAPIError)
+		return
+	}
+	Relay(c, types.RelayFormatOpenAIImage)
+}
+
+func PlaygroundTask(c *gin.Context) {
+	if newAPIError := preparePlaygroundRelay(c, types.RelayFormatTask); newAPIError != nil {
+		respondPlaygroundError(c, newAPIError)
+		return
+	}
+	RelayTask(c)
+}
+
+func preparePlaygroundRelay(c *gin.Context, relayFormat types.RelayFormat) *types.NewAPIError {
+	if c.GetBool("use_access_token") {
+		return types.NewError(errors.New("暂不支持使用 access token"), types.ErrorCodeAccessDenied, types.ErrOptionWithSkipRetry())
+	}
+
+	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, nil, nil)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
-		return
+		return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
-	userId := c.GetInt("id")
-
-	// Write user context to ensure acceptUnsetRatio is available
-	userCache, err := model.GetUserCache(userId)
+	userCache, err := model.GetUserCache(c.GetInt("id"))
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
-		return
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
+	// Write user context to ensure acceptUnsetRatio and the current wallet
+	// settings are available to pricing and settlement.
 	userCache.WriteContext(c)
 
 	tempToken := &model.Token{
-		UserId: userId,
+		UserId: c.GetInt("id"),
 		Name:   fmt.Sprintf("playground-%s", relayInfo.UsingGroup),
 		Group:  relayInfo.UsingGroup,
 	}
 	_ = middleware.SetupContextForToken(c, tempToken)
+	return nil
+}
 
-	Relay(c, types.RelayFormatOpenAI)
+func respondPlaygroundError(c *gin.Context, newAPIError *types.NewAPIError) {
+	if newAPIError == nil {
+		return
+	}
+	c.JSON(newAPIError.StatusCode, gin.H{
+		"error": newAPIError.ToOpenAIError(),
+	})
 }
